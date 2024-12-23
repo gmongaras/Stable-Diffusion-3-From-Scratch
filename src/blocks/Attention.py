@@ -5,20 +5,35 @@ from src.blocks.patchify import patchify, unpatchify
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, rotary_dim=None, emb_dim=None, layer_idx=None):
+    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, rotary_dim=None, emb_dim=None, layer_idx=None, dual=False, last=False):
         super().__init__()
 
         self.layer_idx = layer_idx
+        # Dual blocks have two streams concatenated
+        self.dual = dual
+        # The last layer doesn't have to have a context output
+        self.last = last
 
         # If the attention type is "both", even indices are softmax while odd indices are cosine
         if attn_type == "both":
             attn_type = "softmax" if layer_idx % 2 == 0 else "cosine"
         
         # Projections
-        self.query_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
-        self.key_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
-        self.value_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
-        self.out_proj = nn.Linear(dim if emb_dim == None else emb_dim, dim if emb_dim == None else emb_dim, bias = False)
+        if self.dual:
+            self.query_proj_x = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.key_proj_x = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.value_proj_x = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.out_proj_x = nn.Linear(dim if emb_dim == None else emb_dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.query_proj_c = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.key_proj_c = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.value_proj_c = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            if not self.last:
+                self.out_proj_c = nn.Linear(dim if emb_dim == None else emb_dim, dim if emb_dim == None else emb_dim, bias = False)
+        else:
+            self.query_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.key_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.value_proj = nn.Linear(dim, dim if emb_dim == None else emb_dim, bias = False)
+            self.out_proj = nn.Linear(dim if emb_dim == None else emb_dim, dim if emb_dim == None else emb_dim, bias = False)
         
         self.dim = dim
         self.num_heads = num_heads
@@ -27,11 +42,17 @@ class Attention(nn.Module):
             self.scale = self.head_dim ** -0.5
 
             # Softmax attention also needs q k norms
-            self.q_norm = nn.RMSNorm(dim, dim)
-            self.k_norm = nn.RMSNorm(dim, dim)
+            if self.dual:
+                self.q_norm_x = nn.RMSNorm(dim, dim)
+                self.k_norm_x = nn.RMSNorm(dim, dim)
+                self.q_norm_c = nn.RMSNorm(dim, dim)
+                self.k_norm_c = nn.RMSNorm(dim, dim)
+            else:
+                self.q_norm = nn.RMSNorm(dim, dim)
+                self.k_norm = nn.RMSNorm(dim, dim)
 
         elif attn_type == "cosine":
-            self.norm_const = nn.Parameter(0.5*torch.ones(1, num_heads, 1, 1, dtype=self.query_proj.weight.dtype).to(self.query_proj.weight.device))
+            self.norm_const = nn.Parameter(0.5*torch.ones(1, num_heads, 1, 1, dtype=self.query_proj_x.weight.dtype).to(self.query_proj_x.weight.device))
         elif attn_type == "cosine2":
             pass
         elif attn_type == "cosine3":
@@ -45,63 +66,71 @@ class Attention(nn.Module):
         self.attn_type = attn_type
         self.causal = causal
         self.rotary_dim = rotary_dim
-
-
-
-        self.randomize = False
-        if self.randomize:
-            self.idx = {
-                ((i//8)**2)//4: torch.randperm((((i//8)**2)//4)*dim).to(torch.long).to(self.query_proj.weight.device)
-                for i in range(128, 257, 16)
-            }
-            self.inverses = {
-                ((i//8)**2)//4: torch.empty_like(self.idx[(((i//8)**2)//4)]).to(torch.long).to(self.query_proj.weight.device)
-                for i in range(128, 257, 16)
-            }
-            for k, v in self.idx.items():
-                self.inverses[k][v] = torch.arange(v.size(0)).to(torch.long).to(self.query_proj.weight.device)
         
         
         
         
-    def forward(self, x):
-        N, C, d = x.shape
+    def forward(self, x, c=None):
+        B, N, d = x.shape
+        B, M, d = c.shape if self.dual else (B, N, d)
 
-
-        if self.randomize:
-            # Unpatchify the images
-            shp = x.shape
-            x = x.reshape(x.shape[0], -1)
-            # Randomly shuffle the last index
-            x = x[:, self.idx[shp[1]]]
-            # Patchify the images
-            x = x.reshape(shp)
-            
+        if self.dual:
+            assert c is not None, "Dual attention requires context tensor c"
 
 
         # RMSNorm if softmax
         # Project the queries, keys, and values (N, C, d) --> (N, H, C, d//H)
         if self.attn_type == "softmax":
-            # Add RMS norm if softmax
-            queries = self.q_norm(self.query_proj(x)).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-            keys = self.k_norm(self.key_proj(x)).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-            values = self.value_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            if self.dual:
+                queries_x = self.q_norm_x(self.query_proj_x(x)).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys_x = self.k_norm_x(self.key_proj_x(x)).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values_x = self.value_proj_x(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                queries_c = self.q_norm_c(self.query_proj_c(c)).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys_c = self.k_norm_c(self.key_proj_c(c)).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values_c = self.value_proj_c(c).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            else:
+                queries = self.q_norm(self.query_proj(x)).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys = self.k_norm(self.key_proj(x)).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values = self.value_proj(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         else:
-            queries = self.query_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-            keys = self.key_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
-            values = self.value_proj(x).reshape(N, C, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            if self.dual:
+                queries_x = self.query_proj_x(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys_x = self.key_proj_x(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values_x = self.value_proj_x(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                queries_c = self.query_proj_c(c).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys_c = self.key_proj_c(c).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values_c = self.value_proj_c(c).reshape(B, M, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            else:
+                queries = self.query_proj(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                keys = self.key_proj(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+                values = self.value_proj(x).reshape(B, N, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
         
         # Normalize if cosine attention
         if self.attn_type == "cosine" or self.attn_type == "cosine2":
-            queries = torch.nn.functional.normalize(queries, dim=-1, p=2)
-            keys = torch.nn.functional.normalize(keys, dim=-1, p=2)
+            if self.dual:
+                queries_x = torch.nn.functional.normalize(queries_x, dim=-1, p=2)
+                keys_x = torch.nn.functional.normalize(keys_x, dim=-1, p=2)
+                queries_c = torch.nn.functional.normalize(queries_c, dim=-1, p=2)
+                keys_c = torch.nn.functional.normalize(keys_c, dim=-1, p=2)
+            else:
+                queries = torch.nn.functional.normalize(queries, dim=-1, p=2)
+                keys = torch.nn.functional.normalize(keys, dim=-1, p=2)
+
+        
+        # Concat if dual
+        if self.dual:
+            queries = torch.cat([queries_x, queries_c], dim=2)
+            keys = torch.cat([keys_x, keys_c], dim=2)
+            values = torch.cat([values_x, values_c], dim=2)
+            N_old = N
+            N = N + M
 
             
         # Softmax attention
         if self.attn_type == "softmax":
             # Create mask
             if self.causal:
-                mask = torch.tril(torch.ones(N, self.num_heads, C, C, requires_grad=False)).bool().to(x.device)
+                mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device)
                     
             # Flash attention
             # attn = flash_attn_func(queries, keys, values, causal=self.causal)
@@ -131,7 +160,7 @@ class Attention(nn.Module):
             """
             if self.causal:
                 # Create mask
-                mask = torch.tril(torch.ones(N, self.num_heads, C, C, requires_grad=False)).bool().to(x.device)
+                mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device)
                 
                 # We need to normalize the values
                 values = values / ((mask).sum(-1, keepdims=True)**self.norm_const.sigmoid()).clamp(min=1)
@@ -164,8 +193,8 @@ class Attention(nn.Module):
 
         elif self.attn_type == "cosine3":
             # Create mask
-            mask = torch.tril(torch.ones(N, self.num_heads, C, C, requires_grad=False)).bool().to(x.device) if self.causal \
-                    else torch.ones(N, self.num_heads, C, C, requires_grad=False).bool().to(x.device)
+            mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device) if self.causal \
+                    else torch.ones(B, self.num_heads, N, N, requires_grad=False).bool().to(x.device)
 
             prod = (((queries @ keys.mT))) * mask
 
@@ -205,16 +234,22 @@ class Attention(nn.Module):
 
 
 
-        if self.randomize:
-            attn = self.out_proj(attn.permute(0, 2, 1, 3).reshape(N, C, self.dim))
-            # Unpatchify the images
-            attn = attn.reshape(attn.shape[0], -1)
-            # Inverse the random shuffle
-            attn = attn[:, self.inverses[shp[1]]]
-            # Patchify the images
-            return attn.reshape(shp)
+        # Split if dual
+        if self.dual:
+            attn_x, attn_c = attn[:, :, :N_old], attn[:, :, N_old:]
+
+
+        # Remove heads
+        if self.dual:
+            attn_x = attn_x.permute(0, 2, 1, 3).reshape(B, N_old, -1)
+            attn_c = attn_c.permute(0, 2, 1, 3).reshape(B, M, -1)
+        else:
+            attn = attn.permute(0, 2, 1, 3).reshape(B, N, -1)
 
 
 
         # Output projection
-        return self.out_proj(attn.permute(0, 2, 1, 3).reshape(N, C, -1))
+        if self.dual:
+            return self.out_proj_x(attn_x), (self.out_proj_c(attn_c) if not self.last else attn_c)
+        else:
+            return self.out_proj(attn)

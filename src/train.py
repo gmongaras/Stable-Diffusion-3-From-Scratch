@@ -11,12 +11,12 @@ from typing import List
 
 def train():
     totalSteps = 250_000
-    batchSize = 128
+    batchSize = 96
     inCh = 4
     # class_dim = 1792
     class_dim = 2048
     patch_size = 2
-    num_blocks = 20
+    num_blocks = 19
     dim = int(64*num_blocks)
     c_dim = 512
     hidden_scale = 4.0

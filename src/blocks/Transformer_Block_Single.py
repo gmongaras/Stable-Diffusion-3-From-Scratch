@@ -11,7 +11,7 @@ from xformers.ops.swiglu_op import SwiGLU
 
 
 
-class Transformer_Block(nn.Module):
+class Transformer_Block_Single(nn.Module):
     def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, layer_idx=None):
         super().__init__()
         
@@ -29,7 +29,7 @@ class Transformer_Block(nn.Module):
         self.scale2 = nn.Linear(c_dim, dim)
 
         
-    def forward(self, X, y=None):
+    def forward(self, X, y):
         # Attn layer
         X = (self.attn(self.norm1(X, y)) * self.scale1(y)[:, None, :]) + X
         

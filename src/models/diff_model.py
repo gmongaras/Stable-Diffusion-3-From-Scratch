@@ -9,10 +9,12 @@ import torch
 from torch import nn
 try:
     from src.blocks.PositionalEncoding import PositionalEncoding
-    from src.blocks.Transformer_Block import Transformer_Block
+    from src.blocks.Transformer_Block_Dual import Transformer_Block_Dual
+    from src.blocks.Transformer_Block_Single import Transformer_Block_Single
     from src.blocks.patchify import patchify, unpatchify
     from src.blocks.Norm import Norm
     from src.blocks.ImagePositionalEncoding import PatchEmbed, PatchEmbedAttn
+    from src.blocks.TextPositionalEncoding import TextPositionalEncoding
 except ModuleNotFoundError:
     from ..blocks.PositionalEncoding import PositionalEncoding
 import os
@@ -131,7 +133,7 @@ class diff_model(nn.Module):
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            Transformer_Block(dim, c_dim=c_dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, layer_idx=i).to(device)
+            Transformer_Block_Dual(dim, c_dim=c_dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, layer_idx=i, last=(i==num_blocks-1)).to(device)
             for i in range(num_blocks)
         ])
             
@@ -139,7 +141,7 @@ class diff_model(nn.Module):
         self.t_emb = PositionalEncoding(c_dim, device=device).to(device)
         self.t_emb2 = nn.Linear(c_dim, c_dim, bias=False).to(device)
 
-        # Used to embed the values of c so the model can use it
+        # Used to embed the values of c_pooled so the model can use it
         self.c_emb = nn.Linear(self.class_dim, c_dim, bias=False).to(device)
 
         # Input conditional MLP
@@ -148,6 +150,10 @@ class diff_model(nn.Module):
             nn.SiLU(),
             nn.Linear(c_dim, c_dim)
         ).to(device)
+
+        # Used to embed the values of c so the model can use it
+        # self.c_pos_enc = TextPositionalEncoding(4096, 154, learnable=False).to(device)
+        self.c_proj = nn.Linear(4096, dim, bias=False).to(device)
         
         # Patch embedding (inCh*P*P --> dim)
         # self.patch_emb = nn.Linear(inCh*patch_size*patch_size, dim)
@@ -337,15 +343,19 @@ class diff_model(nn.Module):
         # Patchify the input images
         # x_t = patchify(x_t, (self.patch_size, self.patch_size))
 
+        # Add positional encodings to the text and projecct to the embedding dim
+        # No positiona lencoding so that tokens don't have a position bias
+        c = self.c_proj(c)
+
         # Patchify and add the positional encoding
         x_t = self.pos_enc(x_t)
         
         # Send the patches through the patch embedding
         x_t = self.patch_emb(x_t)
-        
+
         # Send the patches through the transformer blocks
         for i, block in enumerate(self.blocks):
-            x_t = block(x_t, y)
+            x_t, c = block(x_t, c, y)
             
         # Send the output through the output projection
         x_t = self.out_proj(self.out_norm(x_t, y))

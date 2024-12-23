@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 class Data:
     images = None
     text = None
+    text_pooled = None
 
     def __init__(self, images, text, text_pooled, dtype=torch.float16, device=torch.device("cpu")):
         self.images = images.to(dtype=dtype, device=device)
@@ -90,132 +91,116 @@ def send_data_process(data_queue, device, gpu_num):
 
 
 
-# Singleton class for VAE + CLIP + T5
+# Class for VAE + CLIP + T5
 class VAE_T5_CLIP:
-    _instance = None  # Class variable to store the single instance
-    _initialized = False  # Class variable to store the initialization status
-
-    # def __new__(cls, *args, **kwargs):
-    #     if cls._instance is None:
-    #         # Only create the instance on rank 0
-    #         if dist.get_rank() == 0:
-    #             cls._instance = super(VAE_T5_CLIP, cls).__new__(cls)
-    #         # Broadcast the instance reference to all other ranks
-    #         dist.barrier()
-    #         dist.broadcast_object_list([cls._instance], src=0)
-    #     return cls._instance
-    
     def __init__(self, batch_size, offload_device, max_in_buffer=30, num_batches=2):
-        if not self._initialized:
-            self._initialized = True
-
-            # Offloading all models to a single device
-            self.device = offload_device
-            self.batchSize = batch_size
-            self.max_in_buffer = max_in_buffer
-            self.num_batches = num_batches
+        # Offloading all models to a single device
+        self.device = offload_device
+        self.batchSize = batch_size
+        self.max_in_buffer = max_in_buffer
+        self.num_batches = num_batches
 
 
-            # Load in the VAE
-            self.VAE = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema", cache_dir="./pretrained_models/VAE", device=self.device).eval()
-            self.VAE_downsample = 8
-            # Freeze all VAE parameters
-            for param in self.VAE.parameters():
-                param.requires_grad = False
-            # Store locally to prevent issues with DDP
-            self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
+        # Load in the VAE
+        self.VAE = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema", cache_dir="./pretrained_models/VAE", device=self.device).eval()
+        self.VAE_downsample = 8
+        # Freeze all VAE parameters
+        for param in self.VAE.parameters():
+            param.requires_grad = False
+        # Store locally to prevent issues with DDP
+        self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
 
-            # Passes image data through the VAE and then samples from the latent distribution
-            @torch.no_grad()
-            @torch.inference_mode()
-            @torch.compile
-            def forward_VAE_and_sample(x):
-                # 1. Encode
-                # 2. Sample from the latent distribution
-                # 3. Normalize the latent representation
-                return self.VAE.encode(x).latent_dist.sample() * self.VAE.config.scaling_factor
-            self.forward_VAE_and_sample = forward_VAE_and_sample
+        # Passes image data through the VAE and then samples from the latent distribution
+        @torch.no_grad()
+        @torch.inference_mode()
+        @torch.compile
+        def forward_VAE_and_sample(x):
+            # 1. Encode
+            # 2. Sample from the latent distribution
+            # 3. Normalize the latent representation
+            return self.VAE.encode(x).latent_dist.sample() * self.VAE.config.scaling_factor
+        self.forward_VAE_and_sample = forward_VAE_and_sample
 
 
 
 
-            # Load class to string dictionary
-            with open('data/imagenet_class_to_string.pkl', 'rb') as f:
-                class_to_string = pickle.load(f)
-                self.class_to_string = {}
-                for k, v in class_to_string.items():
-                    self.class_to_string[int(k)] = v
+        # Load class to string dictionary
+        with open('data/imagenet_class_to_string.pkl', 'rb') as f:
+            class_to_string = pickle.load(f)
+            self.class_to_string = {}
+            for k, v in class_to_string.items():
+                self.class_to_string[int(k)] = v
 
 
 
-            # CLIP L/4 - https://huggingface.co/openai/clip-vit-large-patch14
-            CLIPL4 = CLIPModel.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
-            self.CLIPL4 = CLIPL4.text_model
-            # self.CLIPL4_proj = CLIPL4.text_projection
-            del CLIPL4
-            self.CLIPL4_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
-            for param in self.CLIPL4.parameters():
-                param.requires_grad = False
-            self.CLIPL4 = self.CLIPL4.eval().half().to(self.device)
-            @torch.no_grad()
-            @torch.inference_mode()
-            @torch.compile
-            def model_CLIPL4(text):
-                return self.CLIPL4(**text)
-            def CLIPL4_encode_text(text):
-                text = self.CLIPL4_processor(text, return_tensors="pt", padding="max_length", truncation=False)
-                return model_CLIPL4(text)
-            # Main function used to encode text using CLIP L/4
-            self.CLIPL4_encode_text = CLIPL4_encode_text
-            # self.CLIPL4_proj = torch.compile(self.CLIPL4_proj).eval().half().to(self.device)
+        # CLIP L/4 - https://huggingface.co/openai/clip-vit-large-patch14
+        CLIPL4 = CLIPModel.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
+        self.CLIPL4 = CLIPL4.text_model
+        # self.CLIPL4_proj = CLIPL4.text_projection
+        del CLIPL4
+        self.CLIPL4_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
+        for param in self.CLIPL4.parameters():
+            param.requires_grad = False
+        self.CLIPL4 = self.CLIPL4.eval().half().to(self.device)
+        @torch.no_grad()
+        @torch.inference_mode()
+        @torch.compile
+        def model_CLIPL4(text):
+            return self.CLIPL4(**text)
+        def CLIPL4_encode_text(text):
+            text = self.CLIPL4_processor(text, return_tensors="pt", padding="max_length", truncation=False)
+            return model_CLIPL4(text)
+        # Main function used to encode text using CLIP L/4
+        self.CLIPL4_encode_text = CLIPL4_encode_text
+        # self.CLIPL4_proj = torch.compile(self.CLIPL4_proj).eval().half().to(self.device)
 
-            # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-g-14-laion2B-s34B-b88K
-            # model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K', precision="fp16", device="cpu", cache_dir="./models/CLIP")
-            # self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K')
-            # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k
-            model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k', precision="fp16", device="cpu", cache_dir="./models/CLIP")
-            self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
-            self.CLIPG14_token_embedding = model.token_embedding.to(dtype=torch.float16, device=self.device)
-            self.CLIPG14_positional_embedding = model.positional_embedding.to(dtype=torch.float16, device=self.device)
-            self.CLIPG14_transformer = model.transformer.to(device=self.device)
-            self.CLIPG14_ln_final = model.ln_final.to(device=self.device)
-            self.CLIPG14_text_projection = model.text_projection.to(dtype=torch.float16, device=self.device)
-            self.CLIPG14_attn_mask = model.attn_mask.to(dtype=torch.float16, device=self.device)
-            del model
-            @torch.no_grad()
-            @torch.inference_mode()
-            @torch.compile
-            def model_CLIPG14(text, cast_dtype):
-                x = self.CLIPG14_token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
-                x = x + self.CLIPG14_positional_embedding.to(cast_dtype)
-                x = x.permute(1, 0, 2)  # NLD -> LND
-                x = self.CLIPG14_transformer(x, attn_mask=self.CLIPG14_attn_mask)
-                x = x.permute(1, 0, 2)  # LND -> NLD
-                x = self.CLIPG14_ln_final(x)  # [batch_size, n_ctx, transformer.width]
-                # take features from the eot embedding (eot_token is the highest number in each sequence)
-                x_pooled = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.CLIPG14_text_projection
-                return x, x_pooled
-            def CLIPG14_encode_text(text):
-                text = self.CLIPG14_tokenizer(text).to(self.device)
-                cast_dtype = self.CLIPG14_transformer.get_cast_dtype()
-                return model_CLIPG14(text, cast_dtype)
-            # Main function used to encode text using CLIP G/14
-            self.CLIPG14_encode_text = CLIPG14_encode_text
+        # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-g-14-laion2B-s34B-b88K
+        # model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K', precision="fp16", device="cpu", cache_dir="./models/CLIP")
+        # self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K')
+        # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k
+        model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k', precision="fp16", device="cpu", cache_dir="./models/CLIP")
+        self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
+        self.CLIPG14_token_embedding = model.token_embedding.to(dtype=torch.float16, device=self.device)
+        self.CLIPG14_positional_embedding = model.positional_embedding.to(dtype=torch.float16, device=self.device)
+        self.CLIPG14_transformer = model.transformer.to(device=self.device)
+        self.CLIPG14_ln_final = model.ln_final.to(device=self.device)
+        self.CLIPG14_text_projection = model.text_projection.to(dtype=torch.float16, device=self.device)
+        self.CLIPG14_attn_mask = model.attn_mask.to(dtype=torch.float16, device=self.device)
+        del model
+        @torch.no_grad()
+        @torch.inference_mode()
+        @torch.compile
+        def model_CLIPG14(text, cast_dtype):
+            x = self.CLIPG14_token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
+            x = x + self.CLIPG14_positional_embedding.to(cast_dtype)
+            x = x.permute(1, 0, 2)  # NLD -> LND
+            x = self.CLIPG14_transformer(x, attn_mask=self.CLIPG14_attn_mask)
+            x = x.permute(1, 0, 2)  # LND -> NLD
+            x = self.CLIPG14_ln_final(x)  # [batch_size, n_ctx, transformer.width]
+            # take features from the eot embedding (eot_token is the highest number in each sequence)
+            x_pooled = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.CLIPG14_text_projection
+            return x, x_pooled
+        def CLIPG14_encode_text(text):
+            text = self.CLIPG14_tokenizer(text).to(self.device)
+            cast_dtype = self.CLIPG14_transformer.get_cast_dtype()
+            return model_CLIPG14(text, cast_dtype)
+        # Main function used to encode text using CLIP G/14
+        self.CLIPG14_encode_text = CLIPG14_encode_text
 
-            # T5 XXL - https://huggingface.co/google/t5-v1_1-xxl
-            # NOTE: Size is limited to 77 tokens, although it was trained on 512
-            self.T5_tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5")
-            self.T5_model = AutoModelForSeq2SeqLM.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5").encoder.to(torch.float16).eval().to(self.device)
-            @torch.no_grad()
-            @torch.inference_mode()
-            def T5_encode_text(text):
-                return self.T5_model(**(self.T5_tokenizer(text, return_tensors="pt", padding="max_length", truncation=False, max_length=77).to(self.device))).last_hidden_state
-            self.T5_encode_text = T5_encode_text
+        # T5 XXL - https://huggingface.co/google/t5-v1_1-xxl
+        # NOTE: Size is limited to 77 tokens, although it was trained on 512
+        self.T5_tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5")
+        self.T5_model = torch.compile(AutoModelForSeq2SeqLM.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5").encoder.to(torch.float16)).eval().to(self.device)
+        @torch.no_grad()
+        @torch.inference_mode()
+        def T5_encode_text(text):
+            return self.T5_model(**(self.T5_tokenizer(text, return_tensors="pt", padding="max_length", truncation=False, max_length=77).to(self.device))).last_hidden_state
+        self.T5_encode_text = T5_encode_text
 
-            torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
-            # Load data forever
-            self.load_data()
+        # Load data forever
+        self.load_data()
     
 
 
