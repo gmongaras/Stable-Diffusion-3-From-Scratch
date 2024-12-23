@@ -7,6 +7,7 @@ import os
 import wandb
 from tqdm import tqdm
 import copy
+import time
 
 import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
@@ -201,7 +202,7 @@ class model_trainer():
         # Model 0 is the data loader
         if rank == 0:
             # Load in the VAE and T5 models onto the first device
-            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{0}"))
+            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{0}"), num_batches=world_size-1)
         dist.barrier(group=self.subgroup)
 
 
@@ -312,11 +313,15 @@ class model_trainer():
             # Get the data
             # data = self.VAE_T5_CLIP.load_data().to(self.device)
             batch_x_0 = torch.empty((self.batchSize, 4, 256//8, 256//8), dtype=torch.float16, device=self.device)
-            batch_class = torch.empty((self.batchSize), dtype=torch.float16, device=self.device)
+            batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
+            batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
             request_flag = torch.tensor([1], device=f"cuda:{self.rank}")  # Request signal
-            dist.send(request_flag, dst=0)  # Send a signal to GPU 1
-            dist.recv(batch_x_0, src=0)  # Receive data from GPU 1
-            dist.recv(batch_class, src=0)  # Receive data from GPU 1
+            # Send request flag to GPU 0
+            dist.send(request_flag, dst=0)
+            # Get the data from GPU 0
+            dist.recv(batch_x_0, src=0)
+            dist.recv(batch_txt, src=0)
+            dist.recv(batch_txt_pooled, src=0)
             # Increate the number of steps taken
             num_steps += 1
             
@@ -343,7 +348,7 @@ class model_trainer():
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_class if useCls else None, nullCls)
+                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls)
 
                 # The label is the velocity: 
                 # v_t = alpha_t' * x + sigma_t' * epsilon_t

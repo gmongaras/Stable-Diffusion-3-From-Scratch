@@ -17,7 +17,6 @@ except ModuleNotFoundError:
     from ..blocks.PositionalEncoding import PositionalEncoding
 import os
 import json
-from .Variance_Scheduler import DDIM_Scheduler
 from tqdm import tqdm
 
 
@@ -82,11 +81,11 @@ class diff_model(nn.Module):
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, num_classes, patch_size, dim, c_dim, hidden_scale, num_heads, attn_type, num_blocks, device, start_step=0, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, c_dim, hidden_scale, num_heads, attn_type, num_blocks, device, start_step=0, wandb_id=None):
         super(diff_model, self).__init__()
         
         self.inCh = inCh
-        self.num_classes = num_classes
+        self.class_dim = class_dim
         self.patch_size = patch_size
         self.start_step = start_step
         self.wandb_id = wandb_id
@@ -94,7 +93,7 @@ class diff_model(nn.Module):
         # Important default parameters
         self.defaults = {
             "inCh": inCh,
-            "num_classes": num_classes,
+            "class_dim": class_dim,
             "patch_size": patch_size,
             "dim": dim,
             "c_dim": c_dim,
@@ -141,7 +140,7 @@ class diff_model(nn.Module):
         self.t_emb2 = nn.Linear(c_dim, c_dim, bias=False).to(device)
 
         # Used to embed the values of c so the model can use it
-        self.c_emb = nn.Linear(self.num_classes, c_dim, bias=False).to(device)
+        self.c_emb = nn.Linear(self.class_dim, c_dim, bias=False).to(device)
 
         # Input conditional MLP
         self.cond_MLP = nn.Sequential(
@@ -281,19 +280,19 @@ class diff_model(nn.Module):
     #   x_t - Batch of images of shape (B, C, L, W)
     #   t - Batch of t values of shape (N) or a single t value. Note
     #       that this t value represents the timestep the model is currently at.
-    #   c - (Optional) Batch of c values of shape (N)
-    #   nullCls - (Optional) Binary tensor of shape (N) where a 1 represents a null class
+    #   c - Batch of class values of shape (N, 154, 2048)
+    #   c_pooled- Batch of pooled class values of shape (N, 2048)
+    #   nullCls - Binary tensor of shape (N) where a 1 represents a null class
     # Outputs:
     #   noise - Batch of noise predictions of shape (B, C, L, W)
     #   v - Batch of v predictions of shape (B, C, L, W)
-    def forward(self, x_t, t, c=None, nullCls=None):
+    def forward(self, x_t, t, c, c_pooled, nullCls):
         # Ensure the data is on the correct device
         x_t = x_t.to(self.device)
         t = t.to(self.device)
-        if c != None:
-            c = c.to(self.device)
-        if nullCls != None:
-            nullCls = nullCls.to(self.device)
+        c = c.to(self.device)
+        c_pooled = c_pooled.to(self.device)
+        nullCls = nullCls.to(self.device)
 
         # Make sure t is in the correct form
         if t != None:
@@ -313,20 +312,22 @@ class diff_model(nn.Module):
                 t = self.t_emb2(self.t_emb(t))
 
 
-        # Embed the class info
-        if type(c) != type(None):
-            # One hot encode the class embeddings
-            c = torch.nn.functional.one_hot(c.to(torch.int64), self.num_classes).to(self.device).to(torch.float)
+        # Embed the pooled class info
+        if type(c_pooled) != type(None):
+            # Apply the null embeddings (zeros)
+            if type(nullCls) != type(None):
+                c_pooled[nullCls, :] *= 0
 
-            c = self.cond_MLP(self.c_emb(c))
+            # Embed the class info
+            c_pooled = self.cond_MLP(self.c_emb(c_pooled))
 
             # Apply the null embeddings (zeros)
             if type(nullCls) != type(None):
-                c[nullCls == 1] *= 0
+                c_pooled[nullCls == 1] *= 0
                 
         # Combine the class and time embeddings
-        if type(c) != type(None):
-            y = t + c
+        if type(c_pooled) != type(None):
+            y = t + c_pooled
         else:
             y = t
             

@@ -12,6 +12,7 @@ import time
 import torch.multiprocessing as mp
 from torch.multiprocessing import get_context
 import pickle
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 
 
@@ -24,13 +25,15 @@ class Data:
     images = None
     text = None
 
-    def __init__(self, images, text, dtype=torch.float16, device=torch.device("cpu")):
+    def __init__(self, images, text, text_pooled, dtype=torch.float16, device=torch.device("cpu")):
         self.images = images.to(dtype=dtype, device=device)
         self.text = text.to(dtype=dtype, device=device)
+        self.text_pooled = text_pooled.to(dtype=dtype, device=device)
 
     def to(self, dtype=torch.float16, device=torch.device("cpu")):
         self.images = self.images.to(dtype=dtype, device=device)
         self.text = self.text.to(dtype=dtype, device=device)
+        self.text_pooled = self.text_pooled.to(dtype=dtype, device=device)
         return self
     
 
@@ -57,6 +60,7 @@ def wait_gpu_n(n, device, data_queue):
         # Send data to GPU
         dist.send(next_data.images, dst=n)
         dist.send(next_data.text, dst=n)
+        dist.send(next_data.text_pooled, dst=n)
         print(f"Send process: Sent data to GPU {n}.")
         # else:
         #     print("Send process: No data in queue to send.")
@@ -68,7 +72,7 @@ def wait_gpu_n(n, device, data_queue):
 @torch.inference_mode()
 def send_data_process(data_queue, device, gpu_num):
     """Separate process to handle data transfer."""
-    dist.init_process_group(backend="nccl", init_method="env://", world_size=3, rank=0)
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=4, rank=0)
     torch.cuda.set_device(device)
     while True:
         # Wait for GPU
@@ -101,7 +105,6 @@ class VAE_T5_CLIP:
     #         dist.broadcast_object_list([cls._instance], src=0)
     #     return cls._instance
     
-
     def __init__(self, batch_size, offload_device, max_in_buffer=30, num_batches=2):
         if not self._initialized:
             self._initialized = True
@@ -120,7 +123,18 @@ class VAE_T5_CLIP:
             for param in self.VAE.parameters():
                 param.requires_grad = False
             # Store locally to prevent issues with DDP
-            self.VAE = torch.compile(self.VAE.eval()).to(dtype=torch.float16, device=self.device)
+            self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
+
+            # Passes image data through the VAE and then samples from the latent distribution
+            @torch.no_grad()
+            @torch.inference_mode()
+            @torch.compile
+            def forward_VAE_and_sample(x):
+                # 1. Encode
+                # 2. Sample from the latent distribution
+                # 3. Normalize the latent representation
+                return self.VAE.encode(x).latent_dist.sample() * self.VAE.config.scaling_factor
+            self.forward_VAE_and_sample = forward_VAE_and_sample
 
 
 
@@ -137,32 +151,71 @@ class VAE_T5_CLIP:
             # CLIP L/4 - https://huggingface.co/openai/clip-vit-large-patch14
             CLIPL4 = CLIPModel.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
             self.CLIPL4 = CLIPL4.text_model
-            self.CLIPL4_proj = CLIPL4.text_projection
+            # self.CLIPL4_proj = CLIPL4.text_projection
             del CLIPL4
             self.CLIPL4_processor = CLIPProcessor.from_pretrained("openai/clip-vit-large-patch14", cache_dir="./models/CLIP")
             for param in self.CLIPL4.parameters():
                 param.requires_grad = False
-            for param in self.CLIPL4_proj.parameters():
-                param.requires_grad = False
             self.CLIPL4 = self.CLIPL4.eval().half().to(self.device)
-            self.CLIPL4_proj = self.CLIPL4_proj.eval().half().to(self.device)
+            @torch.no_grad()
+            @torch.inference_mode()
+            @torch.compile
+            def model_CLIPL4(text):
+                return self.CLIPL4(**text)
+            def CLIPL4_encode_text(text):
+                text = self.CLIPL4_processor(text, return_tensors="pt", padding="max_length", truncation=False)
+                return model_CLIPL4(text)
+            # Main function used to encode text using CLIP L/4
+            self.CLIPL4_encode_text = CLIPL4_encode_text
+            # self.CLIPL4_proj = torch.compile(self.CLIPL4_proj).eval().half().to(self.device)
 
-            # # 
-            # model, preprocess_train, preprocess_val = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k', precision="fp16", device="cpu")
-            # tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
+            # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-g-14-laion2B-s34B-b88K
+            # model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K', precision="fp16", device="cpu", cache_dir="./models/CLIP")
+            # self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-g-14-laion2B-s34B-b88K')
+            # CLIP G/14 - https://huggingface.co/laion/CLIP-ViT-bigG-14-laion2B-39B-b160k
+            model, _, _ = open_clip.create_model_and_transforms('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k', precision="fp16", device="cpu", cache_dir="./models/CLIP")
+            self.CLIPG14_tokenizer = open_clip.get_tokenizer('hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
+            self.CLIPG14_token_embedding = model.token_embedding.to(dtype=torch.float16, device=self.device)
+            self.CLIPG14_positional_embedding = model.positional_embedding.to(dtype=torch.float16, device=self.device)
+            self.CLIPG14_transformer = model.transformer.to(device=self.device)
+            self.CLIPG14_ln_final = model.ln_final.to(device=self.device)
+            self.CLIPG14_text_projection = model.text_projection.to(dtype=torch.float16, device=self.device)
+            self.CLIPG14_attn_mask = model.attn_mask.to(dtype=torch.float16, device=self.device)
+            del model
+            @torch.no_grad()
+            @torch.inference_mode()
+            @torch.compile
+            def model_CLIPG14(text, cast_dtype):
+                x = self.CLIPG14_token_embedding(text).to(cast_dtype)  # [batch_size, n_ctx, d_model]
+                x = x + self.CLIPG14_positional_embedding.to(cast_dtype)
+                x = x.permute(1, 0, 2)  # NLD -> LND
+                x = self.CLIPG14_transformer(x, attn_mask=self.CLIPG14_attn_mask)
+                x = x.permute(1, 0, 2)  # LND -> NLD
+                x = self.CLIPG14_ln_final(x)  # [batch_size, n_ctx, transformer.width]
+                # take features from the eot embedding (eot_token is the highest number in each sequence)
+                x_pooled = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ self.CLIPG14_text_projection
+                return x, x_pooled
+            def CLIPG14_encode_text(text):
+                text = self.CLIPG14_tokenizer(text).to(self.device)
+                cast_dtype = self.CLIPG14_transformer.get_cast_dtype()
+                return model_CLIPG14(text, cast_dtype)
+            # Main function used to encode text using CLIP G/14
+            self.CLIPG14_encode_text = CLIPG14_encode_text
+
+            # T5 XXL - https://huggingface.co/google/t5-v1_1-xxl
+            # NOTE: Size is limited to 77 tokens, although it was trained on 512
+            self.T5_tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5")
+            self.T5_model = AutoModelForSeq2SeqLM.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5").encoder.to(torch.float16).eval().to(self.device)
+            @torch.no_grad()
+            @torch.inference_mode()
+            def T5_encode_text(text):
+                return self.T5_model(**(self.T5_tokenizer(text, return_tensors="pt", padding="max_length", truncation=False, max_length=77).to(self.device))).last_hidden_state
+            self.T5_encode_text = T5_encode_text
+
+            torch.cuda.empty_cache()
 
             # Load data forever
             self.load_data()
-
-
-
-    @torch.no_grad()
-    @torch.inference_mode()
-    def forward_VAE_and_sample(self, x):
-        # 1. Encode
-        # 2. Sample from the latent distribution
-        # 3. Normalize the latent representation
-        return self.VAE.encode(x).latent_dist.sample() * self.VAE.config.scaling_factor
     
 
 
@@ -215,10 +268,8 @@ class VAE_T5_CLIP:
         data_queue = ctx.Queue(maxsize=self.max_in_buffer)
 
         # Start the send_data process for each GPU
-        self.send_data_proc_1 = ctx.Process(target=send_data_process, args=(data_queue, self.device, 1))
-        self.send_data_proc_1.start()
-        self.send_data_proc_2 = ctx.Process(target=send_data_process, args=(data_queue, self.device, 2))
-        self.send_data_proc_2.start()
+        for i in range(1, self.num_batches+1):
+            ctx.Process(target=send_data_process, args=(data_queue, self.device, i)).start()
 
         # # Have a thread continually send data to the other GPUs
         # self.thread = threading.Thread(target=self.send_data)
@@ -241,18 +292,38 @@ class VAE_T5_CLIP:
             # size = 256
             # batch_x_0 = torch.nn.functional.interpolate(batch_x_0, size=(size, size), mode="bilinear")
 
+            # Map each class to a string
+            batch_class = [self.class_to_string[int(c)] for c in batch_class]
+
+            # Encode text using T5
+            T5_output = self.T5_encode_text(batch_class)
+
             # Encode batch using VAE - downsample by a factor of 8
             # Get sample from latent distribution using the reparameterization trick
             batch_x_0 = self.forward_VAE_and_sample(batch_x_0)
 
-            # Map each class to a string
-            batch_class_enc = [self.class_to_string[int(c)] for c in batch_class]
             # Tokenize the class strings
-            batch_class_enc = self.CLIPL4_processor(batch_class, return_tensors="pt", padding=True, truncation=True).to(device=self.device)
+            batch_class_CLIPL4 = self.CLIPL4_processor(batch_class, return_tensors="pt", padding="max_length", truncation=False).to(device=self.device)
             # Encode text using CLIP L/4
-            CLIPL4_output = self.CLIPL4(**batch_class_enc)
+            CLIPL4_output = self.CLIPL4(**batch_class_CLIPL4)
             CLIPL4_hidden = CLIPL4_output.last_hidden_state
             CLIPL4_pooled = CLIPL4_output.pooler_output
+
+            # Encode text using CLIP G/14
+            CLIPG14_output, CLIPG14_pooled = self.CLIPG14_encode_text(batch_class)
+
+            # Create large tensor for parallel text stream (B, 154, 4096)
+            text_hidden = torch.cat([
+                torch.cat([
+                    CLIPL4_hidden, 
+                    CLIPG14_output, 
+                    torch.zeros(CLIPL4_hidden.shape[0], CLIPL4_hidden.shape[1], 2048, dtype=T5_output.dtype, device=T5_output.device)], 
+                dim=2), 
+                T5_output],
+                dim=1
+            )
+            # Create small conditioning vector (B, 2048)
+            text_pooled = torch.cat([CLIPL4_pooled, CLIPG14_pooled], dim=1)
 
             # # Decode the sample
             # if self.dev == "cpu":
@@ -262,14 +333,15 @@ class VAE_T5_CLIP:
 
             # # Save image
             # torchvision.utils.save_image((batch_x_0_[0]+1)/2, f"sample1.png")
-            # torchvision.utils.save_image((batch_x_0_[1]+1)/2, f"sample2.png")
-            # torchvision.utils.save_image((batch_x_0_[2]+1)/2, f"sample3.png")
+            # torchvision.utils.1save_image((batch_x_0_[1]+1)/2, f"sample2.png")
+            # torchvision.utils1.save_image((batch_x_0_[2]+1)/2, f"sample3.png")
 
             # Add to the buffer
             batch_x_0 = batch_x_0.split(self.batchSize)
-            batch_class = batch_class.split(self.batchSize)
+            text = text_hidden.split(self.batchSize)
+            text_pooled = text_pooled.split(self.batchSize)
             for i in range(len(batch_x_0)):
-                data_queue.put(Data(images=batch_x_0[i], text=batch_class[i], dtype=torch.float16, device=self.device))
+                data_queue.put(Data(images=batch_x_0[i], text=text[i], text_pooled=text_pooled[i], dtype=torch.float16, device=self.device))
             # data_queue.put(Data(images=batch_x_0, text=batch_class, dtype=torch.float16, device=self.device))
             # print("Main: Added data to queue.")
 

@@ -13,7 +13,8 @@ def train():
     totalSteps = 250_000
     batchSize = 128
     inCh = 4
-    num_classes = 1000
+    # class_dim = 1792
+    class_dim = 2048
     patch_size = 2
     num_blocks = 20
     dim = int(64*num_blocks)
@@ -47,7 +48,7 @@ def train():
     ### Model Creation
     model = diff_model(
         inCh=inCh,
-        num_classes=num_classes,
+        class_dim=class_dim,
         patch_size=patch_size,
         dim=dim,
         c_dim=c_dim,
