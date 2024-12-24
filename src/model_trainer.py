@@ -167,12 +167,12 @@ class model_trainer():
 
 
         # The world size must be equal to the number of (data loader gpus) * (number of model gpus per loader)
-        assert self.num_loader_gpus * self.num_model_gpus_per_loader == int(os.environ['WORLD_SIZE']), "The number of data loader gpus * the number of model gpus per loader must be equal to the number of GPUs available"
+        assert self.num_loader_gpus + self.num_loader_gpus * self.num_model_gpus_per_loader == int(os.environ['WORLD_SIZE']), "The number of (data loader gpus) + (data loader gpus) * (the number of model gpus per loader) must be equal to the number of GPUs available"
 
 
         # The first GPUs are the data loader GPUs
         self.loader_gpus = [i for i in range(self.num_loader_gpus)]
-        self.model_gpus = [i for i in range(self.num_loader_gpus, self.num_loader_gpus + self.num_model_gpus_per_loader)]
+        self.model_gpus = [i for i in range(self.num_loader_gpus, self.num_loader_gpus + self.num_loader_gpus + self.num_model_gpus_per_loader)]
 
         
         # Convert the device to a torch device
@@ -216,10 +216,20 @@ class model_trainer():
 
 
         # Map from dataloader gpu num to model gpu num
-        self.loader_to_model_gpu = {loader_gpu: model_gpu for loader_gpu, model_gpu in zip(self.loader_gpus, self.model_gpus)}
+        self.loader_to_model_gpu = {loader_gpu: [self.num_loader_gpus+(loader_gpu*self.num_model_gpus_per_loader) + model_gpu for model_gpu in range(0, self.num_model_gpus_per_loader)] for loader_gpu in self.loader_gpus}
         # Map from model gpu num to dataloader gpu num
-        self.model_to_loader_gpu = {model_gpu: loader_gpu for loader_gpu, model_gpu in zip(self.loader_gpus, self.model_gpus)}
-        pass
+        self.model_to_loader_gpu = dict()
+        for loader_gpu in self.loader_to_model_gpu:
+            for model_gpu in self.loader_to_model_gpu[loader_gpu]:
+                self.model_to_loader_gpu[model_gpu] = loader_gpu
+        
+        # Logging
+        if is_main_process():
+            print(f"Total GPUs: {self.world_size}")
+            print(f"Model GPUs: {self.model_gpus}")
+            print(f"Loader GPUs: {self.loader_gpus}")
+            print(f"Model to loader mapping: {self.model_to_loader_gpu}")
+            print(f"Loader to model mapping: {self.loader_to_model_gpu}")
 
 
 
@@ -230,8 +240,12 @@ class model_trainer():
         # Data loader GPUs
         if rank in self.loader_gpus:
             # Load in the VAE and T5 models onto the first device
-            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{rank}"), num_batches=self.num_model_gpus_per_loader)
+            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{rank}"), loader_to_model_gpu=self.loader_to_model_gpu, num_batches=self.num_model_gpus_per_loader)
         dist.barrier(group=self.subgroup)
+
+
+        # Get the loader gpu that the model gpu is mapped to
+        self.loader_gpu = self.model_to_loader_gpu[self.rank]
 
 
         # EMA model on CPU to save GPU memory
@@ -344,12 +358,12 @@ class model_trainer():
             batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
             request_flag = torch.tensor([1], device=f"cuda:{self.rank}")  # Request signal
-            # Send request flag to GPU 0
-            dist.send(request_flag, dst=0)
-            # Get the data from GPU 0
-            dist.recv(batch_x_0, src=0)
-            dist.recv(batch_txt, src=0)
-            dist.recv(batch_txt_pooled, src=0)
+            # Send request flag
+            dist.send(request_flag, dst=self.loader_gpu)
+            # Get the data
+            dist.recv(batch_x_0, src=self.loader_gpu)
+            dist.recv(batch_txt, src=self.loader_gpu)
+            dist.recv(batch_txt_pooled, src=self.loader_gpu)
             # Increate the number of steps taken
             num_steps += 1
             

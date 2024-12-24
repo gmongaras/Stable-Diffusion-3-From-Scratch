@@ -71,9 +71,9 @@ def wait_gpu_n(n, device, data_queue):
 # This function will run forever and continually send data to the other GPUs
 @torch.no_grad()
 @torch.inference_mode()
-def send_data_process(data_queue, device, gpu_num):
+def send_data_process(data_queue, device, rank, world_size, gpu_num):
     """Separate process to handle data transfer."""
-    dist.init_process_group(backend="nccl", init_method="env://", world_size=4, rank=0)
+    dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
     torch.cuda.set_device(device)
     while True:
         # Wait for GPU
@@ -93,12 +93,20 @@ def send_data_process(data_queue, device, gpu_num):
 
 # Class for VAE + CLIP + T5
 class VAE_T5_CLIP:
-    def __init__(self, batch_size, offload_device, max_in_buffer=30, num_batches=2):
+    def __init__(self, batch_size, offload_device, loader_to_model_gpu, max_in_buffer=30, num_batches=2):
         # Offloading all models to a single device
         self.device = offload_device
+        self.loader_to_model_gpu = loader_to_model_gpu
         self.batchSize = batch_size
         self.max_in_buffer = max_in_buffer
         self.num_batches = num_batches
+
+        # Get the rank of the current process
+        self.rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
+
+        # Get the GPUs corresponding to the current process
+        self.gpus = loader_to_model_gpu[self.rank]
 
 
         # Load in the VAE
@@ -189,7 +197,7 @@ class VAE_T5_CLIP:
 
         # T5 XXL - https://huggingface.co/google/t5-v1_1-xxl
         # NOTE: Size is limited to 77 tokens, although it was trained on 512
-        self.T5_tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5")
+        self.T5_tokenizer = AutoTokenizer.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5", legacy=False)
         self.T5_model = torch.compile(AutoModelForSeq2SeqLM.from_pretrained("google/t5-v1_1-xxl", cache_dir="./models/T5").encoder.to(torch.float16)).eval().to(self.device)
         @torch.no_grad()
         @torch.inference_mode()
@@ -253,8 +261,8 @@ class VAE_T5_CLIP:
         data_queue = ctx.Queue(maxsize=self.max_in_buffer)
 
         # Start the send_data process for each GPU
-        for i in range(1, self.num_batches+1):
-            ctx.Process(target=send_data_process, args=(data_queue, self.device, i)).start()
+        for gpu in self.gpus:
+            ctx.Process(target=send_data_process, args=(data_queue, self.device, self.rank, self.world_size, gpu)).start()
 
         # # Have a thread continually send data to the other GPUs
         # self.thread = threading.Thread(target=self.send_data)

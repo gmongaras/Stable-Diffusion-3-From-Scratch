@@ -14,7 +14,7 @@ def train():
     batchSize = 96
     inCh = 4
     num_loader_gpus = 2
-    num_model_gpus_per_loader = 2 # Total GPU count = num_loader_gpus * num_model_gpus_per_loader
+    num_model_gpus_per_loader = 2 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
     # class_dim = 1792
     class_dim = 2048
     patch_size = 2
