@@ -1,0 +1,71 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+
+
+            "program": "/users/gmongaras/miniconda3/bin/torchrun",
+            "args": [ 
+                "--nproc_per_node=6",
+                // "--master-port", "29507",
+                "src/train.py",
+            ],
+            "env": {
+                    "CUDA_LAUNCH_BLOCKING": "1",
+                    "CUDA_VISIBLE_DEVICES": "4,5,6,7",
+                },
+
+            // "program": "/users/gmongaras/work/Cottention_Diffusion_Transformer/src/infer.py",
+            // "args": [
+            //     // "--loadDir", "models/softmax_8GPU_bs128_250Ksteps_18layer_WeightedTime",
+            //     "--loadDir", "models/cosine_8GPU_bs128_250Ksteps_20layer_WeightedTime",
+            //     "--loadDefFile", "model_params_22000s.json",
+            //     "--loadFile", "model_22000s.pkl",
+            //     "--device", "gpu",
+            //     "--num_steps", "50",
+            //     "--class_label", "1",
+            //     "--sampler", "euler",
+            //     "--guidance", "7.5",
+            //     "--seed", "-1",
+            //     "--batch_size", "2"
+            // ],
+            // "env": {
+            //         "CUDA_LAUNCH_BLOCKING": "1",
+            //         "CUDA_VISIBLE_DEVICES": "2",
+            //     },
+
+            // "program": "/users/gmongaras/work/Cottention_Diffusion_Transformer/eval/generate_images.py",
+            // "args": [
+            //     "--loadDir", "models/cosine_4GPU_bs130_250Ksteps_1024dim",
+            //     "--loadFile", "model_250000s.pkl",
+            //     "--loadDefFile", "model_params_250000s.json",
+            //     "--device", "gpu",
+            //     "--num_steps", "100",
+            //     "--guidance", "7.5",
+            //     "--num_per_class", "128",
+            //     "--batch_size", "16",
+            //     "--sampler", "euler a",
+            //     "--seed", "0",
+            // ],
+            // "env": {
+            //         "CUDA_LAUNCH_BLOCKING": "1",
+            //         "CUDA_VISIBLE_DEVICES": "1",
+            //     },
+
+
+            // "program": "/users/gmongaras/work/Cottention_Diffusion_Transformer/eval/calculate_fid_generated.py",
+            // "env": {
+            //         "CUDA_LAUNCH_BLOCKING": "1",
+            //         "CUDA_VISIBLE_DEVICES": "1",
+            //     },
+        }
+    ]
+}
