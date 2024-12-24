@@ -93,11 +93,10 @@ def init_distributed():
 
 
 
-# Distributed without rank 0
-def init_distributed_no_rank0():
-    """Create a new process group excluding rank 0."""
+# Distributed without loader GPUs in the group
+def init_distributed_no_loaders(loader_gpus):
     world_size = dist.get_world_size()
-    ranks_to_include = [rank for rank in range(world_size) if rank != 0]
+    ranks_to_include = [rank for rank in range(world_size) if rank not in loader_gpus]
 
     # Create a new group with ranks other than 0
     subgroup = dist.new_group(ranks=ranks_to_include)
@@ -146,7 +145,9 @@ class model_trainer():
             scalerFile=None, 
             use_amp=True, 
             wandb_name=None, 
-            log_steps=10):
+            log_steps=10,
+            num_loader_gpus=1,
+            num_model_gpus_per_loader=2):
         # Saved info
         self.batchSize = batchSize//numSteps
         self.numSteps = numSteps
@@ -161,6 +162,18 @@ class model_trainer():
         self.use_amp = use_amp
         self.wandb_name = wandb_name
         self.log_steps = log_steps
+        self.num_loader_gpus = num_loader_gpus
+        self.num_model_gpus_per_loader = num_model_gpus_per_loader
+
+
+        # The world size must be equal to the number of (data loader gpus) * (number of model gpus per loader)
+        assert self.num_loader_gpus * self.num_model_gpus_per_loader == int(os.environ['WORLD_SIZE']), "The number of data loader gpus * the number of model gpus per loader must be equal to the number of GPUs available"
+
+
+        # The first GPUs are the data loader GPUs
+        self.loader_gpus = [i for i in range(self.num_loader_gpus)]
+        self.model_gpus = [i for i in range(self.num_loader_gpus, self.num_loader_gpus + self.num_model_gpus_per_loader)]
+
         
         # Convert the device to a torch device
         if device.lower() == "gpu":
@@ -190,19 +203,34 @@ class model_trainer():
             init_distributed()
 
             # Get the subgroup
-            self.subgroup = init_distributed_no_rank0()
+            self.subgroup = init_distributed_no_loaders(self.loader_gpus)
 
-            # Do not create a model on the first device
-            if rank != 0:
+            # Do not create a model on the loader gpus
+            if rank not in self.loader_gpus:
                 self.model = DDP(diff_model.cuda(local_rank), device_ids=[local_rank], process_group=self.subgroup, broadcast_buffers=False, find_unused_parameters=False)
         else:
             self.model = diff_model.cpu()
 
 
-        # Model 0 is the data loader
-        if rank == 0:
+        
+
+
+        # Map from dataloader gpu num to model gpu num
+        self.loader_to_model_gpu = {loader_gpu: model_gpu for loader_gpu, model_gpu in zip(self.loader_gpus, self.model_gpus)}
+        # Map from model gpu num to dataloader gpu num
+        self.model_to_loader_gpu = {model_gpu: loader_gpu for loader_gpu, model_gpu in zip(self.loader_gpus, self.model_gpus)}
+        pass
+
+
+
+
+
+
+
+        # Data loader GPUs
+        if rank in self.loader_gpus:
             # Load in the VAE and T5 models onto the first device
-            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{0}"), num_batches=world_size-1)
+            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{rank}"), num_batches=self.num_model_gpus_per_loader)
         dist.barrier(group=self.subgroup)
 
 
