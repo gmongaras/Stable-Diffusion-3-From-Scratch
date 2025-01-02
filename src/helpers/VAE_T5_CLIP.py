@@ -13,6 +13,15 @@ import torch.multiprocessing as mp
 from torch.multiprocessing import get_context
 import pickle
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import datasets
+import io
+import PIL
+from PIL import Image
+from PIL import PngImagePlugin
+
+# Needed to prevent error with large text chunks - I just set it to a shit ton
+PngImagePlugin.MAX_TEXT_CHUNK = 1000000 * 1024 * 1024
+
 
 
 
@@ -202,7 +211,7 @@ class VAE_T5_CLIP:
         @torch.no_grad()
         @torch.inference_mode()
         def T5_encode_text(text):
-            return self.T5_model(**(self.T5_tokenizer(text, return_tensors="pt", padding="max_length", truncation=False, max_length=77).to(self.device))).last_hidden_state
+            return self.T5_model(**(self.T5_tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=77).to(self.device))).last_hidden_state
         self.T5_encode_text = T5_encode_text
 
         torch.cuda.empty_cache()
@@ -236,18 +245,22 @@ class VAE_T5_CLIP:
             # Data already in range [0, 1]. Make between -1 and 1
             torchvision.transforms.Lambda(lambda x: 2*x - 1.0)
         ])
-        dataset_ = torchvision.datasets.ImageNet
-        pth = "./data/ImageNet12"
-        try:
-            dataset = dataset_(pth, split="train", transform=transforms)
-        except:
-            dataset = dataset_(pth, split="train", transform=transforms, download=True)
+        # dataset_ = torchvision.datasets.ImageNet
+        # pth = "./data/ImageNet12"
+        # try:
+        #     dataset = dataset_(pth, split="train", transform=transforms)
+        # except:
+        #     dataset = dataset_(pth, split="train", transform=transforms, download=True)
+        # def collate_fn(batch):
+        #     return torch.stack([b[0] for b in batch]), torch.tensor([b[1] for b in batch])
+        dataset = datasets.load_dataset("parquet", data_files=f"data/final_dataset/*.parquet", cache_dir="data/cache", split="train")
         def collate_fn(batch):
-            return torch.stack([b[0] for b in batch]), torch.tensor([b[1] for b in batch])
+            return torch.stack([transforms(Image.open(io.BytesIO(b["image"]))) for b in batch]), \
+                [b["caption"] for b in batch]
         data_loader = DataLoader(dataset, batch_size=self.batchSize*self.num_batches,
             pin_memory=True,
             drop_last=False, 
-            sampler=torch.utils.data.RandomSampler(dataset, replacement=True, num_samples=9999999999999),
+            sampler=torch.utils.data.RandomSampler(dataset, replacement=True, num_samples=9999999999999999),
 
             num_workers=10,
             prefetch_factor=10,
@@ -270,7 +283,7 @@ class VAE_T5_CLIP:
 
         # Iterate forever
         for data in data_loader:
-            print(data_queue.qsize())
+            # print(data_queue.qsize())
 
             # Wait until there is space in the queue
             while data_queue.full():
@@ -278,7 +291,7 @@ class VAE_T5_CLIP:
 
             batch_x_0, batch_class = data
             batch_x_0 = batch_x_0.to(dtype=torch.float16, device=self.device)
-            batch_class = batch_class.to(dtype=torch.float16, device=self.device)
+            # batch_class = batch_class.to(dtype=torch.float16, device=self.device)
 
             # # Randomly resize batch between 192 and 256 ( just to have a little variance)
             # # size = np.random.choice([i for i in range(192, 256+1, 16)])
@@ -286,7 +299,7 @@ class VAE_T5_CLIP:
             # batch_x_0 = torch.nn.functional.interpolate(batch_x_0, size=(size, size), mode="bilinear")
 
             # Map each class to a string
-            batch_class = [self.class_to_string[int(c)] for c in batch_class]
+            # batch_class = [self.class_to_string[int(c)] for c in batch_class]
 
             # Encode text using T5
             T5_output = self.T5_encode_text(batch_class)
@@ -296,7 +309,7 @@ class VAE_T5_CLIP:
             batch_x_0 = self.forward_VAE_and_sample(batch_x_0)
 
             # Tokenize the class strings
-            batch_class_CLIPL4 = self.CLIPL4_processor(batch_class, return_tensors="pt", padding="max_length", truncation=False).to(device=self.device)
+            batch_class_CLIPL4 = self.CLIPL4_processor(batch_class, return_tensors="pt", padding="max_length", truncation=True).to(device=self.device)
             # Encode text using CLIP L/4
             CLIPL4_output = self.CLIPL4(**batch_class_CLIPL4)
             CLIPL4_hidden = CLIPL4_output.last_hidden_state
@@ -306,6 +319,11 @@ class VAE_T5_CLIP:
             CLIPG14_output, CLIPG14_pooled = self.CLIPG14_encode_text(batch_class)
 
             # Create large tensor for parallel text stream (B, 154, 4096)
+            # -------------------------------------------------------------
+            # |  [CLIPL4_hidden - (77, 768)]  | [T5_output - (77, 4096)]  |
+            # | [CLIPG14_output - (77, 1280)] |             ...           |
+            # |    [zeros - (77, 2048)]       |             ...           |
+            # -------------------------------------------------------------
             text_hidden = torch.cat([
                 torch.cat([
                     CLIPL4_hidden, 

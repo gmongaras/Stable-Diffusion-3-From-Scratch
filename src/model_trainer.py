@@ -139,7 +139,9 @@ class model_trainer():
             device, 
             saveDir, 
             numSaveSteps, 
-            p_uncond=None, 
+            null_prob_L4=0.464, 
+            null_prob_G14=0.464, 
+            null_prob_T5=0.464,
             optimFile=None, 
             schedulerFile=None, 
             scalerFile=None, 
@@ -147,7 +149,8 @@ class model_trainer():
             wandb_name=None, 
             log_steps=10,
             num_loader_gpus=1,
-            num_model_gpus_per_loader=2):
+            num_model_gpus_per_loader=2,
+            num_gpus_per_device=8):
         # Saved info
         self.batchSize = batchSize//numSteps
         self.numSteps = numSteps
@@ -158,12 +161,15 @@ class model_trainer():
         self.use_lr_scheduler = use_lr_scheduler
         self.saveDir = saveDir
         self.numSaveSteps = numSaveSteps
-        self.p_uncond = p_uncond
+        self.null_prob_L4 = null_prob_L4
+        self.null_prob_G14 = null_prob_G14
+        self.null_prob_T5 = null_prob_T5
         self.use_amp = use_amp
         self.wandb_name = wandb_name
         self.log_steps = log_steps
         self.num_loader_gpus = num_loader_gpus
         self.num_model_gpus_per_loader = num_model_gpus_per_loader
+        self.num_gpus_per_device = num_gpus_per_device
 
 
         # The world size must be equal to the number of (data loader gpus) * (number of model gpus per loader)
@@ -216,7 +222,15 @@ class model_trainer():
 
 
         # Map from dataloader gpu num to model gpu num
-        self.loader_to_model_gpu = {loader_gpu: [self.num_loader_gpus+(loader_gpu*self.num_model_gpus_per_loader) + model_gpu for model_gpu in range(0, self.num_model_gpus_per_loader)] for loader_gpu in self.loader_gpus}
+        # self.loader_to_model_gpu = {loader_gpu: [self.num_loader_gpus+(loader_gpu*self.num_model_gpus_per_loader) + model_gpu for model_gpu in range(0, self.num_model_gpus_per_loader)] for loader_gpu in self.loader_gpus}
+        self.loader_to_model_gpu = {
+            0: [2, 3, 4],
+            1: [5, 6, 7],
+            # 8: [10, 11, 12],
+            # 9: [13, 14, 15],
+        }
+        self.model_gpus = sum(list(self.loader_to_model_gpu.values()), [])
+        self.loader_gpus = list(self.loader_to_model_gpu.keys())
         # Map from model gpu num to dataloader gpu num
         self.model_to_loader_gpu = dict()
         for loader_gpu in self.loader_to_model_gpu:
@@ -224,7 +238,7 @@ class model_trainer():
                 self.model_to_loader_gpu[model_gpu] = loader_gpu
         
         # Logging
-        if is_main_process():
+        if is_main_process(self.subgroup):
             print(f"Total GPUs: {self.world_size}")
             print(f"Model GPUs: {self.model_gpus}")
             print(f"Loader GPUs: {self.loader_gpus}")
@@ -253,7 +267,7 @@ class model_trainer():
         self.ema_model_cpu.eval()
         
         # Optimizer
-        self.optim = torch.optim.AdamW(self.model.parameters(), lr=lr, eps=1e-4, weight_decay=0.01, betas=(0.9, 0.999))
+        self.optim = torch.optim.AdamW(self.model.parameters(), lr=lr, eps=1e-8, weight_decay=0.01, betas=(0.9, 0.999))
 
         # LR Scheduler
         self.scheduler = get_scheduler(self.optim, num_warmup_steps=warmup_steps, num_training_steps=totalSteps, use_lr_scheduler=use_lr_scheduler)
@@ -281,7 +295,7 @@ class model_trainer():
         self.start_step = self.model.start_step if dev == "cpu" else self.model.module.start_step
 
         # Used to sample timesteps
-        self.time_sampler = TimeSampler()
+        self.time_sampler = TimeSampler(weighted=True)
 
         # Total params of the model
         total_params = sum(p.numel() for p in self.model.parameters()) / 1e6
@@ -291,25 +305,6 @@ class model_trainer():
 
     # Trains the model
     def train(self, ):
-
-        # Was class information given?
-        if self.dev == "cpu":
-            if self.model.c_emb is not None:
-                useCls = True
-
-                # Class assertion
-                assert self.p_uncond != None, "p_uncond cannot be None when using class information"
-            else:
-                useCls = False
-        else:
-            if self.model.module.c_emb is not None:
-                useCls = True
-
-                # Class assertion
-                assert self.p_uncond != None, "p_uncond cannot be None when using class information"
-            else:
-                useCls = False
-
         # Put the model is train mode
         self.model.train()
 
@@ -326,7 +321,7 @@ class model_trainer():
         batch_loss = 0
 
         # Initialize wandb run
-        if is_main_process():
+        if is_main_process(self.subgroup):
             wandb.init(
                 project="Cottention_Diffusion",
                 name=self.wandb_name,
@@ -357,7 +352,7 @@ class model_trainer():
             batch_x_0 = torch.empty((self.batchSize, 4, 256//8, 256//8), dtype=torch.float16, device=self.device)
             batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
-            request_flag = torch.tensor([1], device=f"cuda:{self.rank}")  # Request signal
+            request_flag = torch.tensor([1], device=f"cuda:{self.rank}") # Request signal
             # Send request flag
             dist.send(request_flag, dst=self.loader_gpu)
             # Get the data
@@ -373,12 +368,13 @@ class model_trainer():
             t_vals = self.time_sampler(batch_x_0.shape[0])
 
 
-            # Probability of class embeddings being the null embedding
-            if self.p_uncond != None:
-                probs = torch.rand(batch_x_0.shape[0])
-                nullCls = torch.where(probs < self.p_uncond, 1, 0).to(torch.bool).to(self.device)
-            else:
-                nullCls = None
+            # Probability of each of the text embeddings being null
+            probs_L4 = torch.rand(batch_x_0.shape[0])
+            probs_G14 = torch.rand(batch_x_0.shape[0])
+            probs_T5 = torch.rand(batch_x_0.shape[0])
+            nullCls_L4 = torch.where(probs_L4 < self.null_prob_L4, 1, 0).to(torch.bool).to(self.device)
+            nullCls_G14 = torch.where(probs_G14 < self.null_prob_G14, 1, 0).to(torch.bool).to(self.device)
+            nullCls_T5 = torch.where(probs_T5 < self.null_prob_T5, 1, 0).to(torch.bool).to(self.device)
             
 
             # Noise the batch to time t
@@ -390,7 +386,7 @@ class model_trainer():
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls)
+                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_L4, nullCls_G14, nullCls_T5)
 
                 # The label is the velocity: 
                 # v_t = alpha_t' * x + sigma_t' * epsilon_t
@@ -470,7 +466,7 @@ class model_trainer():
                 if num_steps % self.log_steps == 0:
                     batch_loss = batch_loss/self.log_steps
                     
-                    if is_main_process():
+                    if is_main_process(self.subgroup):
                         wandb.log({
                             "loss": batch_loss,
                             "lr": self.optim.param_groups[0]['lr'],
@@ -496,7 +492,7 @@ class model_trainer():
 
 
             # Save the EMA model and graph every number of desired steps
-            if num_steps%self.numSaveSteps == 0 and is_main_process():
+            if num_steps%self.numSaveSteps == 0 and is_main_process(self.subgroup):
                 self.ema_model_cpu.saveModel(self.saveDir, self.optim, self.scheduler, self.grad_scaler, num_steps)
                 # self.graph_losses()
 

@@ -12,8 +12,10 @@ from xformers.ops.swiglu_op import SwiGLU
 
 
 class Transformer_Block_Dual(nn.Module):
-    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, layer_idx=None, last=False):
+    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, checkpoint_MLP=True, layer_idx=None, last=False):
         super().__init__()
+
+        self.checkpoint_MLP = checkpoint_MLP
 
         # On the last block, we don't worry about the c stream
         self.last = last
@@ -48,8 +50,13 @@ class Transformer_Block_Dual(nn.Module):
             c = (c_ * self.scale1_c(y)[:, None, :]) + c
         
         # MLP layer
-        X = (self.MLP_x(self.norm2_x(X, y)) * self.scale2_x(y)[:, None, :]) + X
-        if not self.last:
-            c = (self.MLP_c(self.norm2_c(c, y)) * self.scale2_c(y)[:, None, :]) + c
+        if self.checkpoint_MLP:
+            X = (torch.utils.checkpoint.checkpoint(self.MLP_x, self.norm2_x(X, y)) * self.scale2_x(y)[:, None, :]) + X
+            if not self.last:
+                c = (torch.utils.checkpoint.checkpoint(self.MLP_c, self.norm2_c(c, y)) * self.scale2_c(y)[:, None, :]) + c
+        else:
+            X = (self.MLP_x(self.norm2_x(X, y)) * self.scale2_x(y)[:, None, :]) + X
+            if not self.last:
+                c = (self.MLP_c(self.norm2_c(c, y)) * self.scale2_c(y)[:, None, :]) + c
 
         return X, c

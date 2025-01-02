@@ -25,3 +25,7 @@ def get_rank():
 def is_main_process():
 
     return get_rank() == 0
+
+
+def is_main_process(group):
+    return dist.get_rank(group) == 0

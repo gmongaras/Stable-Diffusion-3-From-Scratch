@@ -15,6 +15,7 @@ try:
     from src.blocks.Norm import Norm
     from src.blocks.ImagePositionalEncoding import PatchEmbed, PatchEmbedAttn
     from src.blocks.TextPositionalEncoding import TextPositionalEncoding
+    from src.helpers.VAE_T5_CLIP_inference import VAE_T5_CLIP_inference
 except ModuleNotFoundError:
     from ..blocks.PositionalEncoding import PositionalEncoding
 import os
@@ -83,7 +84,7 @@ class diff_model(nn.Module):
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, class_dim, patch_size, dim, c_dim, hidden_scale, num_heads, attn_type, num_blocks, device, start_step=0, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, start_step=0, checkpoint_MLP=True, wandb_id=None):
         super(diff_model, self).__init__()
         
         self.inCh = inCh
@@ -98,7 +99,6 @@ class diff_model(nn.Module):
             "class_dim": class_dim,
             "patch_size": patch_size,
             "dim": dim,
-            "c_dim": c_dim,
             "hidden_scale": hidden_scale,
             "num_heads": num_heads,
             "attn_type": attn_type,
@@ -133,23 +133,16 @@ class diff_model(nn.Module):
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            Transformer_Block_Dual(dim, c_dim=c_dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, layer_idx=i, last=(i==num_blocks-1)).to(device)
+            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
             for i in range(num_blocks)
         ])
             
         # Used to embed the values of t so the model can use it
-        self.t_emb = PositionalEncoding(c_dim, device=device).to(device)
-        self.t_emb2 = nn.Linear(c_dim, c_dim, bias=False).to(device)
+        self.t_emb = PositionalEncoding(dim, device=device).to(device)
+        self.t_emb2 = nn.Linear(dim, dim, bias=False).to(device)
 
-        # Used to embed the values of c_pooled so the model can use it
-        self.c_emb = nn.Linear(self.class_dim, c_dim, bias=False).to(device)
-
-        # Input conditional MLP
-        self.cond_MLP = nn.Sequential(
-            nn.Linear(c_dim, c_dim),
-            nn.SiLU(),
-            nn.Linear(c_dim, c_dim)
-        ).to(device)
+        # Input conditional MLP. Used to embed c_pooled
+        self.cond_MLP = nn.Linear(self.class_dim, dim).to(device)
 
         # Used to embed the values of c so the model can use it
         # self.c_pos_enc = TextPositionalEncoding(4096, 154, learnable=False).to(device)
@@ -187,7 +180,7 @@ class diff_model(nn.Module):
             pos_embed_max_size=256
         ).to(device)
         # Output norm
-        self.out_norm = Norm(dim, c_dim).to(device)
+        self.out_norm = Norm(dim, dim).to(device)
         # Output projection
         self.out_proj = nn.Linear(dim, inCh*patch_size*patch_size).to(device)
 
@@ -279,6 +272,11 @@ class diff_model(nn.Module):
     def encode_text_to_block(self, text):
         # L4 encodings
         self.CLIPL4_processor(text=["a photo of a cat", "a photo of a dog"], images=None, return_tensors="pt", padding=True, device=self.device)
+
+    
+
+    def load_text_encoders(self):
+        self.text_encoders = VAE_T5_CLIP_inference(self.device)
     
     
     
@@ -286,19 +284,45 @@ class diff_model(nn.Module):
     #   x_t - Batch of images of shape (B, C, L, W)
     #   t - Batch of t values of shape (N) or a single t value. Note
     #       that this t value represents the timestep the model is currently at.
-    #   c - Batch of class values of shape (N, 154, 2048)
+    #   c - Batch of class values of shape (N, 154, 4096)
     #   c_pooled- Batch of pooled class values of shape (N, 2048)
-    #   nullCls - Binary tensor of shape (N) where a 1 represents a null class
+    #   nullL4 - Binary tensor of shape (N) where a 1 represents a null representation for the L4 encoder
+    #   nullG14 - Binary tensor of shape (N) where a 1 represents a null representation for the G14 encoder
+    #   nullT5 - Binary tensor of shape (N) where a 1 represents a null representation for the T5 encoder
     # Outputs:
     #   noise - Batch of noise predictions of shape (B, C, L, W)
     #   v - Batch of v predictions of shape (B, C, L, W)
-    def forward(self, x_t, t, c, c_pooled, nullCls):
+    def forward(self, x_t, t, c, c_pooled, nullL4=None, nullG14=None, nullT5=None):
         # Ensure the data is on the correct device
         x_t = x_t.to(self.device)
         t = t.to(self.device)
         c = c.to(self.device)
         c_pooled = c_pooled.to(self.device)
-        nullCls = nullCls.to(self.device)
+        nullL4 = nullL4.to(self.device)
+        nullG14 = nullG14.to(self.device)
+        nullT5 = nullT5.to(self.device)
+
+
+        
+
+        # Handling null class values
+        if type(nullL4) != type(None):
+            # Mask the upper left corner of the text matrix
+            c[nullL4, :77, :768] *= 0
+            # Mask the upper part of the pooled vector
+            c_pooled[nullL4, :768] *= 0
+        if type(nullG14) != type(None):
+            # Mask the middle left of the text matrix
+            c[nullG14, :77, 768:2048] *= 0
+            # Mask the lower part of the pooled vector
+            c_pooled[nullG14, 768:2048] *= 0
+        if type(nullT5) != type(None):
+            # Mask the right of the text matrix
+            c[nullT5, 77:, :] *= 0
+            # No pooled part to mask
+
+
+
 
         # Make sure t is in the correct form
         if t != None:
@@ -319,23 +343,10 @@ class diff_model(nn.Module):
 
 
         # Embed the pooled class info
-        if type(c_pooled) != type(None):
-            # Apply the null embeddings (zeros)
-            if type(nullCls) != type(None):
-                c_pooled[nullCls, :] *= 0
-
-            # Embed the class info
-            c_pooled = self.cond_MLP(self.c_emb(c_pooled))
-
-            # Apply the null embeddings (zeros)
-            if type(nullCls) != type(None):
-                c_pooled[nullCls == 1] *= 0
+        c_pooled = self.cond_MLP(c_pooled.to(self.cond_MLP.weight.dtype))
                 
         # Combine the class and time embeddings
-        if type(c_pooled) != type(None):
-            y = t + c_pooled
-        else:
-            y = t
+        y = t.to(c_pooled.dtype) + c_pooled
             
         # Original shape of the images
         orig_shape = x_t.shape
@@ -345,10 +356,10 @@ class diff_model(nn.Module):
 
         # Add positional encodings to the text and projecct to the embedding dim
         # No positiona lencoding so that tokens don't have a position bias
-        c = self.c_proj(c)
+        c = self.c_proj(c.to(self.c_proj.weight.dtype))
 
         # Patchify and add the positional encoding
-        x_t = self.pos_enc(x_t)
+        x_t = self.pos_enc(x_t.to(c.dtype))
         
         # Send the patches through the patch embedding
         x_t = self.patch_emb(x_t)
@@ -385,7 +396,7 @@ class diff_model(nn.Module):
     #   imgs - (only if save_intermediate=True) list of iternediate
     #          outputs for the first image i the batch of shape (steps, C, L, W)
     @torch.no_grad()
-    def sample_imgs(self, batchSize, num_steps, class_label=-1, cfg_scale=0.0, save_intermediate=False, use_tqdm=False, sampler="euler a", generator=None):
+    def sample_imgs(self, batchSize, num_steps, text_input, cfg_scale=0.0, save_intermediate=False, use_tqdm=False, sampler="euler a", generator=None):
         use_vae = True
         
         # Make sure the model is in eval mode
@@ -396,9 +407,13 @@ class diff_model(nn.Module):
         output = torch.randn((batchSize, 4 if use_vae else 3, h//8 if use_vae else h, w//8 if use_vae else w), generator=generator).to(self.device)
         eps = output.clone()
 
+        # Encode the text
+        text_hidden, text_pooled = self.text_encoders.text_to_embedding(text_input)
+
         # Put class label on device and add null label for CFG
-        nullCls = (torch.tensor([0]*batchSize+[1]*batchSize if class_label != -1 else [1, 1]*batchSize).bool().to(self.device))
-        class_label = (torch.tensor([class_label, class_label]*batchSize).to(self.device))
+        nullCls = (torch.tensor([0]*batchSize+[1]*batchSize).bool().to(self.device))
+        text_hidden = (text_hidden.repeat(2*batchSize, 1, 1).to(self.device))
+        text_pooled = (text_pooled.repeat(2*batchSize, 1).to(self.device))
 
         imgs = []
 
@@ -419,7 +434,7 @@ class diff_model(nn.Module):
         #     # move in the opposite direction of v_t.
         #     # So we move in the direction of -v_t
         #     # dx/dt * dt = dx, the change in x we want
-        timesteps = torch.linspace(1, 0, num_steps).to(self.device)  # Linear schedule (can use cosine)
+        timesteps = torch.linspace(1, 0 + (1.0 / num_steps), num_steps).to(self.device)  # Linear schedule (can use cosine)
         for i, t in enumerate(tqdm(timesteps, total=num_steps) if use_tqdm else timesteps):
             # Dynamic CFG scale
             dynamic = False
@@ -431,7 +446,7 @@ class diff_model(nn.Module):
             t = t.repeat(2*batchSize).to(self.device)
 
             # Predict velocity twice for CFG
-            velocity = self.forward(output.repeat(2, 1, 1, 1), t, class_label, nullCls)
+            velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls, nullCls)
             velocity = (1 + cfg_scale_dynamic) * velocity[:batchSize] - cfg_scale_dynamic * velocity[batchSize:]
 
             dt = 1 / num_steps  # Step size
@@ -466,7 +481,7 @@ class diff_model(nn.Module):
 
                 # Next time step
                 t_next = t - dt
-                velocity_2 = self.forward(x_pred.repeat(2, 1, 1, 1), t_next, class_label, nullCls)
+                velocity_2 = self.forward(x_pred.repeat(2, 1, 1, 1), t_next, text_hidden, text_pooled, nullCls, nullCls, nullCls)
                 velocity_2 = (1 + cfg_scale_dynamic) * velocity_2[:batchSize] - cfg_scale_dynamic * velocity_2[batchSize:]
 
                 # Correct step using average velocity
@@ -477,17 +492,17 @@ class diff_model(nn.Module):
             
             if save_intermediate:
                 if use_vae:
-                    imgs.append(self.VAE.decode(output / self.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].cpu().detach())
+                    imgs.append(self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
                 else:
                     imgs.append(output[0].cpu().detach())
         
         if save_intermediate:
             if use_vae:
-                imgs.append(self.VAE.decode(output / self.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].cpu().detach())
+                imgs.append(self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
             else:
                 imgs.append(output[0].cpu().detach())
 
-        output = self.VAE.decode(output / self.VAE.config.scaling_factor).sample.clamp(-1, 1) if use_vae else output
+        output = self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1).float() if use_vae else output
 
         return (output, imgs) if save_intermediate else output
 

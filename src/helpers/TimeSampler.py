@@ -4,7 +4,8 @@ from torch import nn
 
 
 class TimeSampler:
-    def __init__(self, m=0.0, s=1.0):
+    def __init__(self, weighted=True, m=0.0, s=1.0):
+        self.weighted = weighted
         self.m = m
         self.s = s
 
@@ -12,8 +13,11 @@ class TimeSampler:
         return self.sample(n)
 
     def sample(self, n):
-        # Sample n time points from a normal distribution
-        u = torch.randn(n) * self.s + self.m
+        if self.weighted:
+            # Sample n time points from a normal distribution
+            u = torch.randn(n) * self.s + self.m
 
-        # Map the samples to the range [0, 1] using the logistic function
-        return torch.sigmoid(u)
+            # Map the samples to the range [0, 1] using the logistic function
+            return torch.sigmoid(u)
+        else:
+            return torch.rand(n)
