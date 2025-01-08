@@ -102,7 +102,7 @@ def send_data_process(data_queue, device, rank, world_size, gpu_num):
 
 # Class for VAE + CLIP + T5
 class VAE_T5_CLIP:
-    def __init__(self, batch_size, offload_device, loader_to_model_gpu, max_in_buffer=30, num_batches=2):
+    def __init__(self, batch_size, offload_device, rank, world_size, loader_to_model_gpu, max_in_buffer=30, num_batches=2):
         # Offloading all models to a single device
         self.device = offload_device
         self.loader_to_model_gpu = loader_to_model_gpu
@@ -111,8 +111,8 @@ class VAE_T5_CLIP:
         self.num_batches = num_batches
 
         # Get the rank of the current process
-        self.rank = dist.get_rank()
-        self.world_size = dist.get_world_size()
+        self.rank = rank
+        self.world_size = world_size
 
         # Get the GPUs corresponding to the current process
         self.gpus = loader_to_model_gpu[self.rank]

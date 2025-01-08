@@ -65,6 +65,7 @@ def init_distributed():
     rank = int(os.environ["RANK"])
     world_size = int(os.environ['WORLD_SIZE'])
     local_rank = int(os.environ['LOCAL_RANK'])
+    torch.cuda.set_device(local_rank)
     
 
     # Try the nccl backend
@@ -148,9 +149,7 @@ class model_trainer():
             use_amp=True, 
             wandb_name=None, 
             log_steps=10,
-            num_loader_gpus=1,
-            num_model_gpus_per_loader=2,
-            num_gpus_per_device=8):
+            loader_to_model_gpu=None):
         # Saved info
         self.batchSize = batchSize//numSteps
         self.numSteps = numSteps
@@ -167,18 +166,26 @@ class model_trainer():
         self.use_amp = use_amp
         self.wandb_name = wandb_name
         self.log_steps = log_steps
-        self.num_loader_gpus = num_loader_gpus
-        self.num_model_gpus_per_loader = num_model_gpus_per_loader
-        self.num_gpus_per_device = num_gpus_per_device
+        self.loader_to_model_gpu = loader_to_model_gpu
 
+
+        # # The first GPUs are the data loader GPUs
+        # self.loader_gpus = [i for i in range(self.num_loader_gpus)]
+        # self.model_gpus = [i for i in range(self.num_loader_gpus, self.num_loader_gpus + self.num_loader_gpus + self.num_model_gpus_per_loader)]
+
+
+        # Map from dataloader gpu num to model gpu num
+        # self.loader_to_model_gpu = {loader_gpu: [self.num_loader_gpus+(loader_gpu*self.num_model_gpus_per_loader) + model_gpu for model_gpu in range(0, self.num_model_gpus_per_loader)] for loader_gpu in self.loader_gpus}
+        self.model_gpus = sum(list(self.loader_to_model_gpu.values()), [])
+        self.loader_gpus = list(self.loader_to_model_gpu.keys())
+        # Map from model gpu num to dataloader gpu num
+        self.model_to_loader_gpu = dict()
+        for loader_gpu in self.loader_to_model_gpu:
+            for model_gpu in self.loader_to_model_gpu[loader_gpu]:
+                self.model_to_loader_gpu[model_gpu] = loader_gpu
 
         # The world size must be equal to the number of (data loader gpus) * (number of model gpus per loader)
-        assert self.num_loader_gpus + self.num_loader_gpus * self.num_model_gpus_per_loader == int(os.environ['WORLD_SIZE']), "The number of (data loader gpus) + (data loader gpus) * (the number of model gpus per loader) must be equal to the number of GPUs available"
-
-
-        # The first GPUs are the data loader GPUs
-        self.loader_gpus = [i for i in range(self.num_loader_gpus)]
-        self.model_gpus = [i for i in range(self.num_loader_gpus, self.num_loader_gpus + self.num_loader_gpus + self.num_model_gpus_per_loader)]
+        # assert len(self.loader_gpus) + len(self.model_gpus) == int(os.environ['WORLD_SIZE']), "The number of loader gpus and model gpus must be equal to the number of GPUs available"
 
         
         # Convert the device to a torch device
@@ -219,23 +226,6 @@ class model_trainer():
 
 
         
-
-
-        # Map from dataloader gpu num to model gpu num
-        # self.loader_to_model_gpu = {loader_gpu: [self.num_loader_gpus+(loader_gpu*self.num_model_gpus_per_loader) + model_gpu for model_gpu in range(0, self.num_model_gpus_per_loader)] for loader_gpu in self.loader_gpus}
-        self.loader_to_model_gpu = {
-            0: [2, 3, 4],
-            1: [5, 6, 7],
-            # 8: [10, 11, 12],
-            # 9: [13, 14, 15],
-        }
-        self.model_gpus = sum(list(self.loader_to_model_gpu.values()), [])
-        self.loader_gpus = list(self.loader_to_model_gpu.keys())
-        # Map from model gpu num to dataloader gpu num
-        self.model_to_loader_gpu = dict()
-        for loader_gpu in self.loader_to_model_gpu:
-            for model_gpu in self.loader_to_model_gpu[loader_gpu]:
-                self.model_to_loader_gpu[model_gpu] = loader_gpu
         
         # Logging
         if is_main_process(self.subgroup):
@@ -254,7 +244,7 @@ class model_trainer():
         # Data loader GPUs
         if rank in self.loader_gpus:
             # Load in the VAE and T5 models onto the first device
-            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{rank}"), loader_to_model_gpu=self.loader_to_model_gpu, num_batches=self.num_model_gpus_per_loader)
+            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{local_rank}"), loader_to_model_gpu=self.loader_to_model_gpu, rank=rank, world_size=world_size, num_batches=len(self.loader_to_model_gpu[rank]))
         dist.barrier(group=self.subgroup)
 
 
@@ -349,10 +339,11 @@ class model_trainer():
 
             # Get the data
             # data = self.VAE_T5_CLIP.load_data().to(self.device)
+            # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
             batch_x_0 = torch.empty((self.batchSize, 4, 256//8, 256//8), dtype=torch.float16, device=self.device)
             batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
-            request_flag = torch.tensor([1], device=f"cuda:{self.rank}") # Request signal
+            request_flag = torch.tensor([1], device=f"cuda:{self.local_rank}") # Request signal
             # Send request flag
             dist.send(request_flag, dst=self.loader_gpu)
             # Get the data
@@ -493,6 +484,7 @@ class model_trainer():
 
             # Save the EMA model and graph every number of desired steps
             if num_steps%self.numSaveSteps == 0 and is_main_process(self.subgroup):
+                self.ema_model_cpu.wandb_id = self.wandb_id
                 self.ema_model_cpu.saveModel(self.saveDir, self.optim, self.scheduler, self.grad_scaler, num_steps)
                 # self.graph_losses()
 

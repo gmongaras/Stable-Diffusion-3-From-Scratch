@@ -14,6 +14,8 @@ runjob*
 VAE/
 FID_results
 !data/imagenet_class_to_string.pkl
+.env
+imagenet21_class_to_string.json
 
 !.gitignore
 !models/README.md

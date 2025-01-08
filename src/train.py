@@ -13,9 +13,19 @@ def train():
     totalSteps = 250_000
     batchSize = 96
     inCh = 4
-    num_loader_gpus = 2
-    num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
-    num_gpus_per_device = 8 # Number of GPUs per device such as 8 for A100
+    # num_loader_gpus = 2
+    # num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
+    # num_gpus_per_device = 8 # Number of GPUs per device such as 8 for A100
+    loader_to_model_gpu = {
+            0: [2, 3, 4],
+            1: [5, 6, 7],
+            8: [10, 11, 12],
+            9: [13, 14, 15],
+            # 16: [18, 19, 20],
+            # 17: [21, 22, 23],
+            # 24: [26, 27, 28],
+            # 25: [29, 30, 31],
+        }
     # class_dim = 1792
     class_dim = 2048
     patch_size = 2
@@ -25,7 +35,7 @@ def train():
     num_heads = num_blocks
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "attempt1"
+    wandb_name = "test"
     log_steps = 10
     null_prob_L4 = 0.464
     null_prob_G14 = 0.464
@@ -38,15 +48,15 @@ def train():
     checkpoint_MLP = True
 
     numSaveSteps = 1000
-    saveDir = "models/attempt1"
+    saveDir = "models/test"
 
     loadModel = False
-    loadDir = "models/attempt1"
-    loadFile = "model_68000s.pkl"
-    loadDefFile = "model_params_68000s.json"
-    optimFile = "optim_68000s.pkl"
-    schedulerFile = "scheduler_68000s.pkl"
-    scalerFile = "scaler_68000s.pkl"
+    loadDir = "models/test"
+    loadFile = "model_84000s.pkl"
+    loadDefFile = "model_params_84000s.json"
+    optimFile = "optim_84000s.pkl"
+    schedulerFile = "scheduler_84000s.pkl"
+    scalerFile = "scaler_84000s.pkl"
     
     
     
@@ -91,9 +101,7 @@ def train():
         wandb_name=wandb_name,
         log_steps=log_steps,
         device=device,
-        num_loader_gpus=num_loader_gpus,
-        num_model_gpus_per_loader=num_model_gpus_per_loader,
-        num_gpus_per_device=num_gpus_per_device
+        loader_to_model_gpu = loader_to_model_gpu
     )
     trainer.train()
     

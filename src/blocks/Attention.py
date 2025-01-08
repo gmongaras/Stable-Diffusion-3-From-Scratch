@@ -135,7 +135,7 @@ class Attention(nn.Module):
             # Flash attention
             # attn = flash_attn_func(queries, keys, values, causal=self.causal)
 
-            attn = (queries @ keys.mT) / self.scale
+            attn = (queries @ keys.mT) * self.scale
             
             if self.causal:
                 attn = attn.masked_fill(mask, float('-inf')).softmax(dim=-1)
