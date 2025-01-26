@@ -6,7 +6,7 @@
 6. laion/download2.sh - Downloads all of laion
 7. laion/extract_and_shard.sh - Extracts all the outputs of (6) and shards it into another directory, deleting the tar and png along the way while keeping the .json as a checkpoint
 8. download_imagenet21k_and_Recaption.sh - Downloads both the Imagenet21K and Stable_Diffusion_3_Recaption.
-9. recaption_parquets.py - Takes a directory or parquets and recaptions them
+9. recaption_parquet/recaption_parquets.py - Takes a directory or parquets and recaptions them
 
 
 

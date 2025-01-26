@@ -21,10 +21,10 @@ def train():
             1: [5, 6, 7],
             8: [10, 11, 12],
             9: [13, 14, 15],
-            # 16: [18, 19, 20],
-            # 17: [21, 22, 23],
-            # 24: [26, 27, 28],
-            # 25: [29, 30, 31],
+            16: [18, 19, 20],
+            17: [21, 22, 23],
+            24: [26, 27, 28],
+            25: [29, 30, 31],
         }
     # class_dim = 1792
     class_dim = 2048
@@ -35,7 +35,7 @@ def train():
     num_heads = num_blocks
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "test"
+    wandb_name = "attempt2_16GPU_RoPE"
     log_steps = 10
     null_prob_L4 = 0.464
     null_prob_G14 = 0.464
@@ -46,17 +46,18 @@ def train():
     ema_decay = 0.99
     warmup_steps = 1000
     checkpoint_MLP = True
+    positional_encoding = "RoPE" # "absolute" or "RoPE"
 
     numSaveSteps = 1000
-    saveDir = "models/test"
+    saveDir = "models/attempt2_16GPU_RoPE"
 
-    loadModel = False
-    loadDir = "models/test"
-    loadFile = "model_84000s.pkl"
-    loadDefFile = "model_params_84000s.json"
-    optimFile = "optim_84000s.pkl"
-    schedulerFile = "scheduler_84000s.pkl"
-    scalerFile = "scaler_84000s.pkl"
+    loadModel = True
+    loadDir = "models/attempt2_16GPU_RoPE"
+    loadFile = "model_127000s.pkl"
+    loadDefFile = "model_params_127000s.json"
+    optimFile = "optim_127000s.pkl"
+    schedulerFile = "scheduler_127000s.pkl"
+    scalerFile = "scaler_127000s.pkl"
     
     
     
@@ -71,6 +72,7 @@ def train():
         attn_type=attn_type,
         num_blocks=num_blocks,
         checkpoint_MLP=checkpoint_MLP,
+        positional_encoding=positional_encoding,
         device=device,
     )
     

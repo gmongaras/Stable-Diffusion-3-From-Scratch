@@ -17,4 +17,7 @@
 # git clone https://gmongaras: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@huggingface.co/datasets/laion/relaion2B-multi-research
 # git clone https://gmongaras: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@huggingface.co/datasets/laion/relaion2B-nolang-research
 
+### NOTE: If the master fails to bind, edit the below so the host
+###       is set to an open IP
+
 srun bash download2_.sh

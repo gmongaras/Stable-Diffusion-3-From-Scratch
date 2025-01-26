@@ -101,7 +101,7 @@ class PatchEmbed(nn.Module):
         flatten=True,
         bias=True,
         interpolation_scale=1,
-        pos_embed_type="sincos",
+        pos_embed_type="absolute",
         pos_embed_max_size=None,  # For SD3 cropping
     ):
         super().__init__()
@@ -132,12 +132,14 @@ class PatchEmbed(nn.Module):
 
         if pos_embed_type is None:
             self.pos_embed = None
-        elif pos_embed_type == "sincos":
+        elif pos_embed_type == "absolute":
             pos_embed = get_2d_sincos_pos_embed(
                 embed_dim, grid_size, base_size=self.base_size, interpolation_scale=self.interpolation_scale
             )
             persistent = True if pos_embed_max_size else False
             self.register_buffer("pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0), persistent=persistent)
+        elif pos_embed_type == "RoPE":
+            self.pos_embed = None
         else:
             raise ValueError(f"Unsupported pos_embed_type: {pos_embed_type}")
 
@@ -215,7 +217,7 @@ class PatchEmbedAttn(nn.Module):
         flatten=True,
         bias=True,
         interpolation_scale=1,
-        pos_embed_type="sincos",
+        pos_embed_type="absolute",
         pos_embed_max_size=None,  # For SD3 cropping
     ):
         super().__init__()
@@ -251,12 +253,14 @@ class PatchEmbedAttn(nn.Module):
 
         if pos_embed_type is None:
             self.pos_embed = None
-        elif pos_embed_type == "sincos":
+        elif pos_embed_type == "absolute":
             pos_embed = get_2d_sincos_pos_embed(
                 embed_dim, grid_size, base_size=self.base_size, interpolation_scale=self.interpolation_scale
             )
             persistent = True if pos_embed_max_size else False
             self.register_buffer("pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0), persistent=persistent)
+        elif pos_embed_type == "RoPE":
+            self.pos_embed = None
         else:
             raise ValueError(f"Unsupported pos_embed_type: {pos_embed_type}")
 

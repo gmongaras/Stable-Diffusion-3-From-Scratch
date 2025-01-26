@@ -49,6 +49,12 @@ def infer(
     gif_fps: int
     ):
 
+
+
+    from diffusers import AutoencoderKL
+    url = "https://huggingface.co/black-forest-labs/FLUX.1-schnell/blob/main/vae/diffusion_pytorch_model.safetensors"  # can also be a local file
+    model = AutoencoderKL.from_single_file(url, config="./models/FLUX_config.json", cache_dir="./models/VAE", device=device)
+
     
     
     
@@ -65,6 +71,7 @@ def infer(
     num_heads = 8
     attn_type = "cosine"
     num_blocks = 20
+    positional_encoding = "absolute"
     device = "gpu"
 
     model = diff_model(
@@ -76,6 +83,7 @@ def infer(
         num_heads=num_heads,
         attn_type=attn_type,
         num_blocks=num_blocks,
+        positional_encoding=positional_encoding,
         device=device,
     )
     

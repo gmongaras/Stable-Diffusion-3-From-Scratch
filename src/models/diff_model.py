@@ -84,7 +84,7 @@ class diff_model(nn.Module):
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, start_step=0, checkpoint_MLP=True, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, positional_encoding, checkpoint_MLP=True, start_step=0, wandb_id=None):
         super(diff_model, self).__init__()
         
         self.inCh = inCh
@@ -103,6 +103,7 @@ class diff_model(nn.Module):
             "num_heads": num_heads,
             "attn_type": attn_type,
             "num_blocks": num_blocks,
+            "positional_encoding": positional_encoding,
             "device": "cpu",
             "start_step": start_step,
             "wandb_id": wandb_id,
@@ -133,7 +134,7 @@ class diff_model(nn.Module):
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
+            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, positional_encoding=positional_encoding, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
             for i in range(num_blocks)
         ])
             
@@ -176,7 +177,7 @@ class diff_model(nn.Module):
             flatten=True, 
             bias=False, 
             interpolation_scale=1, 
-            pos_embed_type="sincos", 
+            pos_embed_type=positional_encoding,
             pos_embed_max_size=256
         ).to(device)
         # Output norm
@@ -571,6 +572,8 @@ class diff_model(nn.Module):
             with open(loadDir + os.sep + loadDefFile, "r") as f:
                 self.defaults = json.load(f)
             D = self.defaults
+            if "positional_encoding" not in D:
+                D["positional_encoding"] = "absolute"
 
             # Reinitialize the model with the new defaults
             self.__init__(**D)

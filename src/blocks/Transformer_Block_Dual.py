@@ -12,7 +12,7 @@ from xformers.ops.swiglu_op import SwiGLU
 
 
 class Transformer_Block_Dual(nn.Module):
-    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, checkpoint_MLP=True, layer_idx=None, last=False):
+    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, positional_encoding="absolute", checkpoint_MLP=True, layer_idx=None, last=False):
         super().__init__()
 
         self.checkpoint_MLP = checkpoint_MLP
@@ -25,7 +25,7 @@ class Transformer_Block_Dual(nn.Module):
         self.MLP_x = SwiGLU(dim, int(dim*hidden_scale), dim)
         if not self.last:
             self.MLP_c = SwiGLU(dim, int(dim*hidden_scale), dim)
-        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal, layer_idx=layer_idx, dual=True, last=last)
+        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal, positional_encoding=positional_encoding, layer_idx=layer_idx, dual=True, last=last)
         
         # Two layer norms
         self.norm1_x = Norm(dim, c_dim)

@@ -340,6 +340,7 @@ class model_trainer():
             # Get the data
             # data = self.VAE_T5_CLIP.load_data().to(self.device)
             # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
+            # dist.barrier(self.subgroup)
             batch_x_0 = torch.empty((self.batchSize, 4, 256//8, 256//8), dtype=torch.float16, device=self.device)
             batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
@@ -350,6 +351,7 @@ class model_trainer():
             dist.recv(batch_x_0, src=self.loader_gpu)
             dist.recv(batch_txt, src=self.loader_gpu)
             dist.recv(batch_txt_pooled, src=self.loader_gpu)
+            # dist.barrier(self.subgroup)
             # Increate the number of steps taken
             num_steps += 1
             

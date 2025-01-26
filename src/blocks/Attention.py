@@ -2,11 +2,14 @@ import torch
 from torch import nn
 from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 from src.blocks.patchify import patchify, unpatchify
+from src.blocks.rotary_embedding import RotaryEmbedding
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, rotary_dim=None, emb_dim=None, layer_idx=None, dual=False, last=False):
+    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, emb_dim=None, positional_encoding="absolute", layer_idx=None, dual=False, last=False):
         super().__init__()
+
+        self.positional_encoding = positional_encoding
 
         self.layer_idx = layer_idx
         # Dual blocks have two streams concatenated
@@ -65,7 +68,11 @@ class Attention(nn.Module):
             raise RuntimeError(f"attn_type must be either softmax or cosine, but got {attn_type}")
         self.attn_type = attn_type
         self.causal = causal
-        self.rotary_dim = rotary_dim
+        
+
+        # Rotary embeddings
+        if positional_encoding == "RoPE":
+            self.rotary_emb = RotaryEmbedding(self.head_dim)
         
         
         
@@ -115,6 +122,16 @@ class Attention(nn.Module):
             else:
                 queries = torch.nn.functional.normalize(queries, dim=-1, p=2)
                 keys = torch.nn.functional.normalize(keys, dim=-1, p=2)
+
+
+        # Apply rotary embeddings only to the image
+        if self.positional_encoding == "RoPE":
+            if self.dual:
+                queries_x = self.rotary_emb.rotate_queries_or_keys(queries_x)
+                keys_x = self.rotary_emb.rotate_queries_or_keys(keys_x)
+            else:
+                queries[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(queries[:, :, :N])
+                keys[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(keys[:, :, :N])
 
         
         # Concat if dual

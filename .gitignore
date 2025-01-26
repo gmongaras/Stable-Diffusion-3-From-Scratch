@@ -4,7 +4,6 @@ models/*
 models_res_conv/*
 models_res_res/*
 models_res/*
-data/*
 *.gif
 *.png
 eval/saved_stats/*
@@ -16,13 +15,22 @@ FID_results
 !data/imagenet_class_to_string.pkl
 .env
 imagenet21_class_to_string.json
+*.out
+*.out.*
+data/cache/
+data/data/
+data/ImageNet12/
+data/Imagenet21K/
+data/laion/laion-metadata/
+data/laion/relaion2B-en-research-data/
+data/laion/relaion2B-en-research-data-sharded/
+data/laion/tmp/
+data/laion/img2dataset.pex
+data/Stable_Diffusion_3_Recaption
+data/cc12m.tsv
 
 !.gitignore
 !models/README.md
-!data/README.md
-!data/loadImagenet64.py
-!data/make_massive_tensor.py
-!data/class_information.txt
 !results/*.gif
 !results/*.png
 

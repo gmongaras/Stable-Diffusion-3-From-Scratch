@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 import tempfile
 import pyarrow as pa
 import pyarrow.parquet as pq
+PIL.Image.MAX_IMAGE_PIXELS = 933120000
 
 
 input_folder = "data/laion/relaion2B-en-research-data"

@@ -8,7 +8,8 @@ PEX_FILE="/projects/eclarson/protein_diffusion/gmongaras_diffusion_models/Stable
 OUTPUT_DIR="/projects/eclarson/protein_diffusion/gmongaras_diffusion_models/Stable_Diffusion_3/data/laion/relaion2B-en-research-data"
 URL_LIST="/projects/eclarson/protein_diffusion/gmongaras_diffusion_models/Stable_Diffusion_3/data/laion/laion-metadata/relaion2B-en-research/"
 PORT=7077
-HOST=c119.cm.cluster
+HOST=c137.cm.cluster
+echo "If the master fails to bind to $HOST, edit the start-master.sh script and remove the --host part. See what it binds to then add it back, editting the HOST variable"
 
 
 # Load necessary modules
@@ -54,7 +55,7 @@ def create_spark_session():
         .config("spark.executorEnv.PEX_ROOT", "./.pex")
         .config("spark.executor.cores", "16")
         .config("spark.cores.max", "48") # you can reduce this number if you want to use only some cores ; if you're using yarn the option name is different, check spark doc
-        .config("spark.driver.port", "5678")
+        .config("spark.driver.port", "7678")
         .config("spark.driver.blockManager.port", "6678")
         .config("spark.driver.host", "172.31.44.42")
         .config("spark.driver.bindAddress", "172.31.44.42")
