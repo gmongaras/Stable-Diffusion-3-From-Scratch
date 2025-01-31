@@ -168,7 +168,7 @@ class Attention(nn.Module):
                 mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device)
                     
             # Flash attention
-            attn = flash_attn_func(queries.to(torch.bfloat16), keys.to(torch.bfloat16), values.to(torch.bfloat16), causal=self.causal).to(queries.dtype)
+            attn = flash_attn_func(queries.transpose(1, 2).to(torch.bfloat16), keys.transpose(1, 2).to(torch.bfloat16), values.transpose(1, 2).to(torch.bfloat16), causal=self.causal, softmax_scale=self.scale).transpose(1, 2).to(queries.dtype)
             
         # Cosine attention
         elif self.attn_type == "cosine":

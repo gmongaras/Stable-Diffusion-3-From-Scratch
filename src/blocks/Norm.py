@@ -10,8 +10,8 @@ class Norm(nn.Module):
         self.norm = nn.LayerNorm(dim, elementwise_affine=False)
         
         # Class shift and scale
-        self.c_shift = nn.Linear(c_dim, dim)
-        self.c_scale = nn.Linear(c_dim, dim)
+        self.c_shift = nn.Linear(c_dim, dim, bias=False)
+        self.c_scale = nn.Linear(c_dim, dim, bias=False)
         
     def forward(self, X, y=None):
         # Layer norm

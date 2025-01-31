@@ -35,11 +35,11 @@ class Transformer_Block_Dual(nn.Module):
             self.norm2_c = Norm(dim, c_dim)
 
         # Scale params
-        self.scale1_x = nn.Linear(c_dim, dim)
-        self.scale2_x = nn.Linear(c_dim, dim)
+        self.scale1_x = nn.Linear(c_dim, dim, bias=False)
+        self.scale2_x = nn.Linear(c_dim, dim, bias=False)
         if not self.last:
-            self.scale1_c = nn.Linear(c_dim, dim)
-            self.scale2_c = nn.Linear(c_dim, dim)
+            self.scale1_c = nn.Linear(c_dim, dim, bias=False)
+            self.scale2_c = nn.Linear(c_dim, dim, bias=False)
 
         
     def forward(self, X, c, y):

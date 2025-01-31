@@ -313,7 +313,7 @@ class model_trainer():
         # Initialize wandb run
         if is_main_process(self.subgroup):
             wandb.init(
-                project="Cottention_Diffusion",
+                project="Stable_Diffusion_3",
                 name=self.wandb_name,
                 notes=None, # May add notes later
                 
@@ -333,7 +333,7 @@ class model_trainer():
         dist.barrier(self.subgroup)
 
         # Iterate over the desiered number of steps
-        for step in range(num_steps, self.totalSteps):
+        for step in tqdm(range(num_steps, self.totalSteps)) if is_main_process(self.subgroup) else range(num_steps, self.totalSteps):
             # for step, data in enumerate(tqdm(data_loader, initial=num_steps, total=self.totalSteps)):
             step = step + self.start_step
 
@@ -341,10 +341,10 @@ class model_trainer():
             # data = self.VAE_T5_CLIP.load_data().to(self.device)
             # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
             # dist.barrier(self.subgroup)
-            batch_x_0 = torch.empty((self.batchSize, 4, 256//8, 256//8), dtype=torch.float16, device=self.device)
-            batch_txt = torch.empty((self.batchSize, 154, 4096), dtype=torch.float16, device=self.device)
+            batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, 256//8, 256//8), dtype=torch.float16, device=self.device)
+            batch_txt = torch.empty((self.batchSize, 128, 2304), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
-            request_flag = torch.tensor([1], device=f"cuda:{self.local_rank}") # Request signal
+            request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
             # Send request flag
             dist.send(request_flag, dst=self.loader_gpu)
             # Get the data
@@ -362,12 +362,10 @@ class model_trainer():
 
 
             # Probability of each of the text embeddings being null
-            probs_L4 = torch.rand(batch_x_0.shape[0])
-            probs_G14 = torch.rand(batch_x_0.shape[0])
-            probs_T5 = torch.rand(batch_x_0.shape[0])
-            nullCls_L4 = torch.where(probs_L4 < self.null_prob_L4, 1, 0).to(torch.bool).to(self.device)
-            nullCls_G14 = torch.where(probs_G14 < self.null_prob_G14, 1, 0).to(torch.bool).to(self.device)
-            nullCls_T5 = torch.where(probs_T5 < self.null_prob_T5, 1, 0).to(torch.bool).to(self.device)
+            probs_pooled = torch.rand(batch_x_0.shape[0])
+            probs_dual = torch.rand(batch_x_0.shape[0])
+            nullCls_pooled = torch.where(probs_pooled < 0.1, 1, 0).to(torch.bool).to(self.device)
+            nullCls_dual = torch.where(probs_dual < 0.1, 1, 0).to(torch.bool).to(self.device)
             
 
             # Noise the batch to time t
@@ -379,7 +377,7 @@ class model_trainer():
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_L4, nullCls_G14, nullCls_T5)
+                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_dual)
 
                 # The label is the velocity: 
                 # v_t = alpha_t' * x + sigma_t' * epsilon_t
@@ -406,7 +404,7 @@ class model_trainer():
                 else:
                     loss = loss.mean()
 
-            print(num_steps, loss)
+            # print(num_steps, loss)
 
             # Scale the loss to be consistent with the batch size. If the loss
             # isn't scaled, then the loss will be treated as an independent
@@ -432,9 +430,9 @@ class model_trainer():
                 if self.use_amp:
                     self.grad_scaler.unscale_(self.optim)
 
-                # # Clip gradients
-                # if self.use_amp:
-                #     torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                # Clip gradients
+                if self.use_amp:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 
                 # Update the model using all losses over the steps
                 if self.use_amp:

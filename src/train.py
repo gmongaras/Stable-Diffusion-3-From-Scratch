@@ -11,8 +11,8 @@ from typing import List
 
 def train():
     totalSteps = 250_000
-    batchSize = 96
-    inCh = 4
+    batchSize = 128
+    inCh = 16
     # num_loader_gpus = 2
     # num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
     # num_gpus_per_device = 8 # Number of GPUs per device such as 8 for A100
@@ -26,8 +26,11 @@ def train():
             24: [26, 27, 28],
             25: [29, 30, 31],
         }
+    #loader_to_model_gpu = {
+    #        0: [1],
+    #    }
     # class_dim = 1792
-    class_dim = 2048
+    class_dim = 768
     patch_size = 2
     num_blocks = 19
     dim = int(64*num_blocks)
@@ -35,7 +38,7 @@ def train():
     num_heads = num_blocks
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "attempt2_16GPU_RoPE"
+    wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
     log_steps = 10
     null_prob_L4 = 0.464
     null_prob_G14 = 0.464
@@ -49,15 +52,15 @@ def train():
     positional_encoding = "RoPE" # "absolute" or "RoPE"
 
     numSaveSteps = 1000
-    saveDir = "models/attempt2_16GPU_RoPE"
+    saveDir = "models/attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
 
-    loadModel = True
-    loadDir = "models/attempt2_16GPU_RoPE"
-    loadFile = "model_127000s.pkl"
-    loadDefFile = "model_params_127000s.json"
-    optimFile = "optim_127000s.pkl"
-    schedulerFile = "scheduler_127000s.pkl"
-    scalerFile = "scaler_127000s.pkl"
+    loadModel = False
+    loadDir = "models/attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
+    loadFile = "model_1000s.pkl"
+    loadDefFile = "model_params_1000s.json"
+    optimFile = "optim_1000s.pkl"
+    schedulerFile = "scheduler_1000s.pkl"
+    scalerFile = "scaler_1000s.pkl"
     
     
     

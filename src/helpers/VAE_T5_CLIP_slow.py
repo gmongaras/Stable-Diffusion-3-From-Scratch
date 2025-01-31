@@ -60,7 +60,7 @@ class Data:
 
 
 
-def wait_gpu_n(n, device, parent_conn):
+def wait_gpu_n(n, device, data_queue):
     # Wait for a request flag from GPU
     request_flag = torch.tensor([0], dtype=torch.bool, device=device)
     dist.irecv(request_flag, src=n).wait()
@@ -71,12 +71,11 @@ def wait_gpu_n(n, device, parent_conn):
         #     time.sleep(0.01)
         # if not data_queue.empty():
         # Get data from the queue
-        # next_data = data_queue.get()
-        next_data = parent_conn.recv()
+        next_data = data_queue.get()
         # Send data to GPU
-        dist.send(next_data["images"], dst=n)
-        dist.send(next_data["text"], dst=n)
-        dist.send(next_data["text_pooled"], dst=n)
+        dist.send(next_data.images, dst=n)
+        dist.send(next_data.text, dst=n)
+        dist.send(next_data.text_pooled, dst=n)
         # print(f"Send process: Sent data to GPU {n}.")
         # else:
         #     print("Send process: No data in queue to send.")
@@ -86,14 +85,14 @@ def wait_gpu_n(n, device, parent_conn):
 # This function will run forever and continually send data to the other GPUs
 @torch.no_grad()
 @torch.inference_mode()
-def send_data_process(parent_conn, device, rank, world_size, gpu_num):
+def send_data_process(data_queue, device, rank, world_size, gpu_num):
     """Separate process to handle data transfer."""
     dist.init_process_group(backend="nccl", init_method="env://", world_size=world_size, rank=rank)
     torch.cuda.set_device(device)
     while True:
         # Wait for GPU
-        wait_gpu_n(gpu_num, device, parent_conn)
-        
+        wait_gpu_n(gpu_num, device, data_queue)
+
 
 
 
@@ -133,7 +132,7 @@ class VAE_T5_CLIP:
             param.requires_grad = False
         # Store locally to prevent issues with DDP
         self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
-        # self.VAE = torch.compile(self.VAE, mode="reduce-overhead")
+
         # Passes image data through the VAE and then samples from the latent distribution
         @torch.no_grad()
         @torch.inference_mode()
@@ -142,7 +141,7 @@ class VAE_T5_CLIP:
             # 2. Sample from the latent distribution
             # 3. Normalize the latent representation
             return self.VAE.encode(x).latent_dist.sample() * self.VAE.config.scaling_factor + self.VAE.config.shift_factor
-        # forward_VAE_and_sample = torch.compile(forward_VAE_and_sample, backend="inductor")
+        forward_VAE_and_sample = torch.compile(forward_VAE_and_sample, backend="inductor")
         self.forward_VAE_and_sample = forward_VAE_and_sample
 
 
@@ -155,18 +154,17 @@ class VAE_T5_CLIP:
         for param in self.CLIP_model.parameters():
             param.requires_grad = False
         self.CLIP_model = self.CLIP_model.eval().half()
-        # We want to use the text projection layer as the final output which
-        # also decreases the variance of the output.
-        self.CLIP_text_proj = self.CLIP_model.text_projection
         # Delete vision model
         # del self.CLIP_model.vision_model
         # del self.CLIP_model.visual_projection
-        # model_CLIP = torch.compile(model_CLIP, backend="inductor")
         @torch.no_grad()
         @torch.inference_mode()
+        def model_CLIP(text):
+            return self.CLIP_model.text_model(**text).pooler_output
+        # model_CLIP = torch.compile(model_CLIP, backend="inductor")
         def CLIP_encode_text(text):
             text = self.CLIP_processor(text, return_tensors="pt", padding=True, truncation=True).to(device=self.device)
-            return self.CLIP_text_proj(self.CLIP_model.text_model(**text).pooler_output)
+            return model_CLIP(text)
         self.CLIP_encode_text = CLIP_encode_text
 
 
@@ -177,7 +175,7 @@ class VAE_T5_CLIP:
         with open(".env", "r") as f:
             token = f.read().strip()
         self.Gemma_tokenizer = GemmaTokenizerFast.from_pretrained("google/gemma-2-2b", cache_dir="./models/Gemma2b", legacy=False, token=token)
-        self.Gemma_model = Gemma2ForCausalLM.from_pretrained("google/gemma-2-2b", cache_dir="./models/Gemma2b", token=token).half().eval().to(self.device)
+        self.Gemma_model = Gemma2ForCausalLM.from_pretrained("google/gemma-2-2b", cache_dir="./models/Gemma2b", token=token).eval().to(self.device)
         @torch.no_grad()
         @torch.inference_mode()
         def Gemma_encode_text(text): # Output of shape (B, 128, 2304)
@@ -246,7 +244,6 @@ class VAE_T5_CLIP:
             collate_fn=collate_fn
         )
 
-        """
         ctx = get_context("spawn")
 
         # Use multiprocessing Queue to safely share data
@@ -255,18 +252,6 @@ class VAE_T5_CLIP:
         # Start the send_data process for each GPU
         for gpu in self.gpus:
             ctx.Process(target=send_data_process, args=(data_queue, self.device, self.rank, self.world_size, gpu)).start()
-        """
-        ctx = mp.get_context("spawn")
-        processes = []
-        pipes = []
-
-        # Start the send_data process for each GPU and keep a connection to each process
-        for gpu in self.gpus:
-            parent_conn, child_conn = ctx.Pipe()  # Create a Pipe
-            pipes.append(parent_conn)
-            process = ctx.Process(target=send_data_process, args=(child_conn, self.device, self.rank, self.world_size, gpu))
-            processes.append(process)
-            process.start()
 
         # # Have a thread continually send data to the other GPUs
         # self.thread = threading.Thread(target=self.send_data)
@@ -276,9 +261,9 @@ class VAE_T5_CLIP:
         for data in data_loader:
             # print(data_queue.qsize())
 
-            # # Wait until there is space in the queue
-            # while data_queue.full():
-            #     time.sleep(0.01)  # Avoid busy-waiting
+            # Wait until there is space in the queue
+            while data_queue.full():
+                time.sleep(0.01)  # Avoid busy-waiting
 
             batch_x_0, batch_class = data
             batch_x_0 = batch_x_0.to(dtype=torch.float16, device=self.device)
@@ -301,11 +286,8 @@ class VAE_T5_CLIP:
             batch_x_0 = batch_x_0.split(self.batchSize)
             text = text_hidden.split(self.batchSize)
             text_pooled = text_pooled.split(self.batchSize)
-            # for i in range(len(batch_x_0)):
-            #     data_queue.put(Data(images=batch_x_0[i], text=text[i], text_pooled=text_pooled[i], dtype=torch.float16, device=self.device))
-            # Send data directly to each process
-            for i, pipe in enumerate(pipes):
-                pipe.send({"images": batch_x_0[i], "text": text[i], "text_pooled": text_pooled[i]})
+            for i in range(len(batch_x_0)):
+                data_queue.put(Data(images=batch_x_0[i], text=text[i], text_pooled=text_pooled[i], dtype=torch.float16, device=self.device))
 
 
 

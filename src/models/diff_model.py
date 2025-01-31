@@ -143,11 +143,15 @@ class diff_model(nn.Module):
         self.t_emb2 = nn.Linear(dim, dim, bias=False).to(device)
 
         # Input conditional MLP. Used to embed c_pooled
-        self.cond_MLP = nn.Linear(self.class_dim, dim).to(device)
+        self.cond_MLP = nn.Linear(self.class_dim, dim, bias=False).to(device)
 
         # Used to embed the values of c so the model can use it
         # self.c_pos_enc = TextPositionalEncoding(4096, 154, learnable=False).to(device)
-        self.c_proj = nn.Linear(4096, dim, bias=False).to(device)
+        self.c_proj = nn.Linear(2304, dim, bias=False).to(device)
+        # The inputs for the Gemma model have insane variance. Norm to fix that.
+        self.pre_c_norm = nn.RMSNorm(2304).to(device)
+        # This also helps with the variance problem
+        self.learnable_scalar = nn.Parameter(torch.tensor([0.01], dtype=torch.float, device=device), requires_grad=True).to(device)
         
         # Patch embedding (inCh*P*P --> dim)
         # self.patch_emb = nn.Linear(inCh*patch_size*patch_size, dim)
@@ -270,10 +274,6 @@ class diff_model(nn.Module):
     
 
 
-    def encode_text_to_block(self, text):
-        # L4 encodings
-        self.CLIPL4_processor(text=["a photo of a cat", "a photo of a dog"], images=None, return_tensors="pt", padding=True, device=self.device)
-
     
 
     def load_text_encoders(self):
@@ -293,34 +293,25 @@ class diff_model(nn.Module):
     # Outputs:
     #   noise - Batch of noise predictions of shape (B, C, L, W)
     #   v - Batch of v predictions of shape (B, C, L, W)
-    def forward(self, x_t, t, c, c_pooled, nullL4=None, nullG14=None, nullT5=None):
+    def forward(self, x_t, t, c, c_pooled, nullCls_pooled=None, nullCls_dual=None):
         # Ensure the data is on the correct device
         x_t = x_t.to(self.device)
         t = t.to(self.device)
         c = c.to(self.device)
         c_pooled = c_pooled.to(self.device)
-        nullL4 = nullL4.to(self.device)
-        nullG14 = nullG14.to(self.device)
-        nullT5 = nullT5.to(self.device)
+        nullCls_pooled = nullCls_pooled.to(self.device) if type(nullCls_pooled) != type(None) else None
+        nullCls_dual = nullCls_dual.to(self.device) if type(nullCls_dual) != type(None) else None
 
 
         
 
-        # Handling null class values
-        if type(nullL4) != type(None):
-            # Mask the upper left corner of the text matrix
-            c[nullL4, :77, :768] *= 0
-            # Mask the upper part of the pooled vector
-            c_pooled[nullL4, :768] *= 0
-        if type(nullG14) != type(None):
-            # Mask the middle left of the text matrix
-            c[nullG14, :77, 768:2048] *= 0
-            # Mask the lower part of the pooled vector
-            c_pooled[nullG14, 768:2048] *= 0
-        if type(nullT5) != type(None):
-            # Mask the right of the text matrix
-            c[nullT5, 77:, :] *= 0
-            # No pooled part to mask
+        # Handling null class values for pooled and dual
+        if type(nullCls_pooled) != type(None):
+            # Mask the pooled class info
+            c_pooled[nullCls_pooled] *= 0
+        if type(nullCls_dual) != type(None):
+            # Mask the dual class info
+            c[nullCls_dual] *= 0
 
 
 
@@ -355,9 +346,9 @@ class diff_model(nn.Module):
         # Patchify the input images
         # x_t = patchify(x_t, (self.patch_size, self.patch_size))
 
-        # Add positional encodings to the text and projecct to the embedding dim
-        # No positiona lencoding so that tokens don't have a position bias
-        c = self.c_proj(c.to(self.c_proj.weight.dtype))
+        # Add positional encodings to the text and project to the embedding dim
+        # No positional encoding so that tokens don't have a position bias
+        c = self.c_proj(self.learnable_scalar * self.pre_c_norm(c.to(self.c_proj.weight.dtype)))
 
         # Patchify and add the positional encoding
         x_t = self.pos_enc(x_t.to(c.dtype))
@@ -397,7 +388,7 @@ class diff_model(nn.Module):
     #   imgs - (only if save_intermediate=True) list of iternediate
     #          outputs for the first image i the batch of shape (steps, C, L, W)
     @torch.no_grad()
-    def sample_imgs(self, batchSize, num_steps, text_input, cfg_scale=0.0, save_intermediate=False, use_tqdm=False, sampler="euler a", generator=None):
+    def sample_imgs(self, batchSize, num_steps, text_input, cfg_scale=0.0, save_intermediate=False, use_tqdm=False, sampler="euler", generator=None):
         use_vae = True
         
         # Make sure the model is in eval mode
@@ -405,7 +396,7 @@ class diff_model(nn.Module):
 
         # The initial image is pure noise
         h = w = 256
-        output = torch.randn((batchSize, 4 if use_vae else 3, h//8 if use_vae else h, w//8 if use_vae else w), generator=generator).to(self.device)
+        output = torch.randn((batchSize, self.text_encoders.VAE.config.latent_channels if use_vae else 3, h//8 if use_vae else h, w//8 if use_vae else w), generator=generator).to(self.device)
         eps = output.clone()
 
         # Encode the text
@@ -447,7 +438,7 @@ class diff_model(nn.Module):
             t = t.repeat(2*batchSize).to(self.device)
 
             # Predict velocity twice for CFG
-            velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls, nullCls)
+            velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls)
             velocity = (1 + cfg_scale_dynamic) * velocity[:batchSize] - cfg_scale_dynamic * velocity[batchSize:]
 
             dt = 1 / num_steps  # Step size
@@ -493,17 +484,17 @@ class diff_model(nn.Module):
             
             if save_intermediate:
                 if use_vae:
-                    imgs.append(self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
+                    imgs.append(self.text_encoders.VAE.decode((output.to(self.text_encoders.VAE.dtype) - self.text_encoders.VAE.config.shift_factor) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
                 else:
                     imgs.append(output[0].cpu().detach())
         
         if save_intermediate:
             if use_vae:
-                imgs.append(self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
+                imgs.append(self.text_encoders.VAE.decode((output.to(self.text_encoders.VAE.dtype) - self.text_encoders.VAE.config.shift_factor) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1)[0].float().cpu().detach())
             else:
                 imgs.append(output[0].cpu().detach())
 
-        output = self.text_encoders.VAE.decode(output.to(self.text_encoders.VAE.dtype) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1).float() if use_vae else output
+        output = self.text_encoders.VAE.decode((output.to(self.text_encoders.VAE.dtype) - self.text_encoders.VAE.config.shift_factor) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1).float() if use_vae else output
 
         return (output, imgs) if save_intermediate else output
 
