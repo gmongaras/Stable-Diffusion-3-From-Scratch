@@ -17,11 +17,17 @@ FID_results
 imagenet21_class_to_string.json
 *.out
 *.out.*
+*.err
+*.log
 data/cache/
 data/data/
 data/ImageNet12/
 data/Imagenet21K/
+!data/Imagenet21K/create_split.py
+!data/Imagenet21K/uploady.py
+!data/Imagenet21K/README.md
 data/laion/laion-metadata/
+data/cc12m_and_imagenet21K/
 data/laion/relaion2B-en-research-data/
 data/laion/relaion2B-en-research-data-sharded/
 data/laion/tmp/
