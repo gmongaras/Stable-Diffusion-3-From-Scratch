@@ -140,6 +140,8 @@ class PatchEmbed(nn.Module):
             self.register_buffer("pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0), persistent=persistent)
         elif pos_embed_type == "RoPE":
             self.pos_embed = None
+        elif pos_embed_type == "NoPE":
+            self.pos_embed = None
         else:
             raise ValueError(f"Unsupported pos_embed_type: {pos_embed_type}")
 

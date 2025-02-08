@@ -21,6 +21,7 @@ except ModuleNotFoundError:
 import os
 import json
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 
 
@@ -84,7 +85,7 @@ class diff_model(nn.Module):
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, positional_encoding, checkpoint_MLP=True, start_step=0, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, positional_encoding, kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, start_step=0, wandb_id=None):
         super(diff_model, self).__init__()
         
         self.inCh = inCh
@@ -92,6 +93,9 @@ class diff_model(nn.Module):
         self.patch_size = patch_size
         self.start_step = start_step
         self.wandb_id = wandb_id
+
+        # Positional encoding assert
+        assert positional_encoding in ["absolute", "RoPE", "NoPE"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE'"
         
         # Important default parameters
         self.defaults = {
@@ -104,6 +108,8 @@ class diff_model(nn.Module):
             "attn_type": attn_type,
             "num_blocks": num_blocks,
             "positional_encoding": positional_encoding,
+            "kv_merge_attn": kv_merge_attn,
+            "qk_half_dim": qk_half_dim,
             "device": "cpu",
             "start_step": start_step,
             "wandb_id": wandb_id,
@@ -134,7 +140,7 @@ class diff_model(nn.Module):
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, positional_encoding=positional_encoding, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
+            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
             for i in range(num_blocks)
         ])
             
@@ -147,11 +153,15 @@ class diff_model(nn.Module):
 
         # Used to embed the values of c so the model can use it
         # self.c_pos_enc = TextPositionalEncoding(4096, 154, learnable=False).to(device)
-        self.c_proj = nn.Linear(2304, dim, bias=False).to(device)
+        self.text_hidden_shape = 2304
+        self.c_proj = nn.Linear(self.text_hidden_shape, dim, bias=False).to(device)
+        self.c_proj2 = nn.Linear(self.text_hidden_shape, dim, bias=False).to(device)
         # The inputs for the Gemma model have insane variance. Norm to fix that.
-        self.pre_c_norm = nn.RMSNorm(2304).to(device)
+        self.pre_c_norm = nn.RMSNorm(self.text_hidden_shape).to(device)
+        self.pre_c_norm2 = nn.RMSNorm(self.text_hidden_shape).to(device)
         # This also helps with the variance problem
         self.learnable_scalar = nn.Parameter(torch.tensor([0.01], dtype=torch.float, device=device), requires_grad=True).to(device)
+        self.learnable_scalar2 = nn.Parameter(torch.tensor([0.01], dtype=torch.float, device=device), requires_grad=True).to(device)
         
         # Patch embedding (inCh*P*P --> dim)
         # self.patch_emb = nn.Linear(inCh*patch_size*patch_size, dim)
@@ -189,16 +199,10 @@ class diff_model(nn.Module):
         # Output projection
         self.out_proj = nn.Linear(dim, inCh*patch_size*patch_size).to(device)
 
+        # Used to scale the time value. Initialized to 1000 for high variance between timesteps.
+        self.time_scale = nn.Parameter(torch.tensor([1000.0], dtype=torch.float, device=device), requires_grad=True).to(device)
+
         
-            
-            
-    # Unsqueezing n times along the given dim.
-    # Note: dim can be 0 or -1
-    def unsqueeze(self, X, dim, n):
-        if dim == 0:
-            return X.reshape(n*(1,) + X.shape)
-        else:
-            return X.reshape(X.shape + (1,)*n)
     
         
     # Used to noise a batch of images by t timesteps
@@ -222,55 +226,6 @@ class diff_model(nn.Module):
         
         # Noise the images
         return X_t, epsilon
-
-
-
-    # Used to convert a batch of noise predictions to
-    # a batch of mean predictions
-    # Inputs:
-    #   epsilon - The epsilon value for the mean of shape (N, C, L, W)
-    #   x_t - The image to unoise of shape (N, C, L, W)
-    #   t - A batch of t values for the beta schedulers of shape (N)
-    #   corrected - True to calculate the corrected mean that doesn't
-    #               go outside the bounds. False otherwise.
-    # Outputs:
-    #   A tensor of shape (N, C, L, W) representing the mean of the
-    #     unnoised image
-    def noise_to_mean(self, epsilon, x_t, t, corrected=True):
-        # Note: Corrected function from the following:
-        # https://github.com/hojonathanho/diffusion/issues/5
-
-        
-        # Get the beta and a values for the batch of t values
-        beta_t = self.scheduler.sample_beta_t(t)
-        sqrt_a_t = self.scheduler.sample_sqrt_a_t(t)
-        a_bar_t = self.scheduler.sample_a_bar_t(t)
-        sqrt_a_bar_t = self.scheduler.sample_sqrt_a_bar_t(t)
-        sqrt_1_minus_a_bar_t = self.scheduler.sample_sqrt_1_minus_a_bar_t(t)
-        a_bar_t1 = self.scheduler.sample_a_bar_t1(t)
-        sqrt_a_bar_t1 = self.scheduler.sample_sqrt_a_bar_t1(t)
-
-
-        if len(t.shape) == 1:
-            t = self.unsqueeze(t, -1, 3)
-
-
-        # Calculate the uncorrected mean
-        if corrected == False:
-            return (1/sqrt_a_t)*(x_t - (beta_t/sqrt_1_minus_a_bar_t)*epsilon)
-
-
-        # Calculate the corrected mean and return it
-        mean = torch.where(t == 0,
-            # When t is 0, normal without correction
-            (1/sqrt_a_t)*(x_t - (beta_t/sqrt_1_minus_a_bar_t)*epsilon),
-
-            # When t is not 0, special with correction
-            (sqrt_a_bar_t1*beta_t)/(1-a_bar_t) * \
-                torch.clamp( (1/sqrt_a_bar_t)*x_t - (sqrt_1_minus_a_bar_t/sqrt_a_bar_t)*epsilon, -1, 1 ) + \
-                (((1-a_bar_t1)*sqrt_a_t)/(1-a_bar_t))*x_t
-        )
-        return mean
     
 
 
@@ -293,25 +248,30 @@ class diff_model(nn.Module):
     # Outputs:
     #   noise - Batch of noise predictions of shape (B, C, L, W)
     #   v - Batch of v predictions of shape (B, C, L, W)
-    def forward(self, x_t, t, c, c_pooled, nullCls_pooled=None, nullCls_dual=None):
+    def forward(self, x_t, t, c, c_pooled, nullCls_pooled=None, nullCls_gemma=None, nullCls_bert=None):
         # Ensure the data is on the correct device
         x_t = x_t.to(self.device)
         t = t.to(self.device)
         c = c.to(self.device)
         c_pooled = c_pooled.to(self.device)
         nullCls_pooled = nullCls_pooled.to(self.device) if type(nullCls_pooled) != type(None) else None
-        nullCls_dual = nullCls_dual.to(self.device) if type(nullCls_dual) != type(None) else None
+        nullCls_gemma = nullCls_gemma.to(self.device) if type(nullCls_gemma) != type(None) else None
+        nullCls_bert = nullCls_bert.to(self.device) if type(nullCls_bert) != type(None) else None
 
 
         
 
         # Handling null class values for pooled and dual
-        if type(nullCls_pooled) != type(None):
-            # Mask the pooled class info
-            c_pooled[nullCls_pooled] *= 0
-        if type(nullCls_dual) != type(None):
-            # Mask the dual class info
-            c[nullCls_dual] *= 0
+        with torch.no_grad():
+            if type(nullCls_pooled) != type(None):
+                # Mask the pooled class info
+                c_pooled[nullCls_pooled] *= 0
+            if type(nullCls_gemma) != type(None):
+                # Mask the dual class info
+                c[nullCls_gemma, :77] *= 0
+            if type(nullCls_bert) != type(None):
+                # Mask the dual class info
+                c[nullCls_bert, 77:] *= 0
 
 
 
@@ -330,8 +290,7 @@ class diff_model(nn.Module):
                 return
             
             # Encode the timesteps
-            if len(t.shape) == 1:
-                t = self.t_emb2(self.t_emb(t))
+            t = self.t_emb2(self.t_emb(t.float() * self.time_scale))
 
 
         # Embed the pooled class info
@@ -348,7 +307,10 @@ class diff_model(nn.Module):
 
         # Add positional encodings to the text and project to the embedding dim
         # No positional encoding so that tokens don't have a position bias
-        c = self.c_proj(self.learnable_scalar * self.pre_c_norm(c.to(self.c_proj.weight.dtype)))
+        c = torch.cat([
+            self.c_proj(self.learnable_scalar * self.pre_c_norm(c[:, :77].to(self.c_proj.weight.dtype))),
+            self.c_proj2(self.learnable_scalar2 * self.pre_c_norm2(c[:, 77:].to(self.c_proj.weight.dtype)))
+        ], dim=1)
 
         # Patchify and add the positional encoding
         x_t = self.pos_enc(x_t.to(c.dtype))
@@ -438,7 +400,7 @@ class diff_model(nn.Module):
             t = t.repeat(2*batchSize).to(self.device)
 
             # Predict velocity twice for CFG
-            velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls)
+            velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls, nullCls)
             velocity = (1 + cfg_scale_dynamic) * velocity[:batchSize] - cfg_scale_dynamic * velocity[batchSize:]
 
             dt = 1 / num_steps  # Step size
@@ -495,6 +457,7 @@ class diff_model(nn.Module):
                 imgs.append(output[0].cpu().detach())
 
         output = self.text_encoders.VAE.decode((output.to(self.text_encoders.VAE.dtype) - self.text_encoders.VAE.config.shift_factor) / self.text_encoders.VAE.config.scaling_factor).sample.clamp(-1, 1).float() if use_vae else output
+        # output = self.text_encoders.VAE.decode((output.to(self.text_encoders.VAE.dtype) - self.text_encoders.VAE.config.shift_factor) / self.text_encoders.VAE.config.scaling_factor).sample.float() if use_vae else output
 
         return (output, imgs) if save_intermediate else output
 
@@ -505,20 +468,23 @@ class diff_model(nn.Module):
     # optimizer (optional) - Optimizer object to save the state of
     # scheduler (optional) - Scheduler object to save the state of
     # step (optional) - Current step of the model (helps when loading state)
-    def saveModel(self, saveDir, optimizer=None, scheduler=None, grad_scalar=None, step=None):
+    def saveModel(self, saveDir, EMA_state_dict=None, optimizer=None, scheduler=None, grad_scalar=None, step=None):
         # Craft the save string
         saveFile = "model"
+        emaFile = "model_ema"
         optimFile = "optim"
         schedulerFile = "scheduler"
         scalarFile = "scaler"
         saveDefFile = "model_params"
         if step:
             saveFile += f"_{step}s"
+            emaFile += f"_{step}s"
             optimFile += f"_{step}s"
             schedulerFile += f"_{step}s"
             scalarFile += f"_{step}s"
             saveDefFile += f"_{step}s"
         saveFile += ".pkl"
+        emaFile += ".pkl"
         optimFile += ".pkl"
         schedulerFile += ".pkl"
         scalarFile += ".pkl"
@@ -536,8 +502,10 @@ class diff_model(nn.Module):
         if not os.path.isdir(saveDir):
             os.makedirs(saveDir)
         
-        # Save the model and the optimizer
+        # Save the model and other objects
         torch.save(self.state_dict(), saveDir + os.sep + saveFile)
+        if EMA_state_dict:
+            torch.save(EMA_state_dict, saveDir + os.sep + emaFile)
         if optimizer:
             torch.save(optimizer.state_dict(), saveDir + os.sep + optimFile)
         if scheduler:
@@ -548,6 +516,16 @@ class diff_model(nn.Module):
         # Save the defaults
         with open(saveDir + os.sep + saveDefFile, "w") as f:
             json.dump(self.defaults, f)
+
+        # # Sample image
+        # img = self.sample_imgs(1, 100, ["A small bird with a red breast perches on a rock"], save_intermediate=False, use_tqdm=False, sampler="euler")
+        # img = img[0].cpu().detach().numpy().transpose(1, 2, 0)
+        # img = (((img + 1)/2)*255)
+        # img = torch.clamp(img.cpu().detach().int(), 0, 255)
+        # plt.close('all')
+        # plt.axis('off')
+        # plt.savefig(f"{saveDir + os.sep}{step}s.png", bbox_inches='tight', pad_inches=0)
+
     
     
     # Load the model
@@ -563,8 +541,6 @@ class diff_model(nn.Module):
             with open(loadDir + os.sep + loadDefFile, "r") as f:
                 self.defaults = json.load(f)
             D = self.defaults
-            if "positional_encoding" not in D:
-                D["positional_encoding"] = "absolute"
 
             # Reinitialize the model with the new defaults
             self.__init__(**D)

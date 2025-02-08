@@ -11,7 +11,7 @@ from typing import List
 
 def train():
     totalSteps = 250_000
-    batchSize = 128
+    batchSize = 120
     inCh = 16
     # num_loader_gpus = 2
     # num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
@@ -26,7 +26,7 @@ def train():
             24: [26, 27, 28],
             25: [29, 30, 31],
         }
-    #loader_to_model_gpu = {
+    # loader_to_model_gpu = {
     #        0: [1],
     #    }
     # class_dim = 1792
@@ -38,29 +38,33 @@ def train():
     num_heads = num_blocks
     attn_type = "cosine"
     device = "gpu"
-    wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
+    # wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag_Merge"
+    wandb_name = "datav2_attempt2_8GPU_Cos_Redo"
     log_steps = 10
-    null_prob_L4 = 0.464
-    null_prob_G14 = 0.464
-    null_prob_T5 = 0.464
+    null_prob_pooled = 0.1
+    null_prob_gemma = 0.1
+    null_prob_bert = 0.1
     lr = 1e-4
     use_lr_scheduler = False
     ema_update_freq = 100
     ema_decay = 0.99
     warmup_steps = 1000
     checkpoint_MLP = True
-    positional_encoding = "RoPE" # "absolute" or "RoPE"
+    positional_encoding = "RoPE" # "absolute" or "RoPE" or "NoPE"
+    kv_merge_attn = False
+    qk_half_dim = False
 
     numSaveSteps = 1000
-    saveDir = "models/attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
+    saveDir = "models/datav2_attempt2_8GPU_Cos_Redo"
 
-    loadModel = False
-    loadDir = "models/attempt4_16GPU_RoPE_Cos_Clip_Fixmag"
-    loadFile = "model_1000s.pkl"
-    loadDefFile = "model_params_1000s.json"
-    optimFile = "optim_1000s.pkl"
-    schedulerFile = "scheduler_1000s.pkl"
-    scalerFile = "scaler_1000s.pkl"
+    loadModel = True
+    loadDir = "models/datav2_attempt2_8GPU_Cos_Redo"
+    loadFile = "model_50000s.pkl"
+    load_ema_file = "model_ema_50000s.pkl"
+    loadDefFile = "model_params_50000s.json"
+    optimFile = "optim_50000s.pkl"
+    schedulerFile = "scheduler_50000s.pkl"
+    scalerFile = "scaler_50000s.pkl"
     
     
     
@@ -76,6 +80,8 @@ def train():
         num_blocks=num_blocks,
         checkpoint_MLP=checkpoint_MLP,
         positional_encoding=positional_encoding,
+        kv_merge_attn=kv_merge_attn,
+        qk_half_dim=qk_half_dim,
         device=device,
     )
     
@@ -96,9 +102,10 @@ def train():
         use_lr_scheduler=use_lr_scheduler,
         saveDir=saveDir,
         numSaveSteps=numSaveSteps,
-        null_prob_L4=null_prob_L4,
-        null_prob_G14=null_prob_G14,
-        null_prob_T5=null_prob_T5,
+        null_prob_pooled=null_prob_pooled,
+        null_prob_gemma=null_prob_gemma,
+        null_prob_bert=null_prob_bert,
+        load_ema_file=None if loadModel==False or load_ema_file==None else loadDir+os.sep+load_ema_file,
         optimFile=None if loadModel==False or optimFile==None else loadDir+os.sep+optimFile,
         schedulerFile=None if loadModel==False or schedulerFile==None else loadDir+os.sep+schedulerFile,
         scalerFile=None if loadModel==False or scalerFile==None else loadDir+os.sep+scalerFile,

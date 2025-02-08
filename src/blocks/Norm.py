@@ -18,7 +18,6 @@ class Norm(nn.Module):
         X = self.norm(X)
         
         # Class conditioning
-        if type(y) != type(None):
-            X = (X * (1 + self.c_scale(y)[:, None, :])) + self.c_shift(y)[:, None, :]
+        X = (X * (1 + self.c_scale(y)[:, None, :])) + self.c_shift(y)[:, None, :]
             
         return X

@@ -140,9 +140,10 @@ class model_trainer():
             device, 
             saveDir, 
             numSaveSteps, 
-            null_prob_L4=0.464, 
-            null_prob_G14=0.464, 
-            null_prob_T5=0.464,
+            null_prob_pooled=0.1, 
+            null_prob_gemma=0.1, 
+            null_prob_bert=0.1,
+            load_ema_file=None,
             optimFile=None, 
             schedulerFile=None, 
             scalerFile=None, 
@@ -160,9 +161,9 @@ class model_trainer():
         self.use_lr_scheduler = use_lr_scheduler
         self.saveDir = saveDir
         self.numSaveSteps = numSaveSteps
-        self.null_prob_L4 = null_prob_L4
-        self.null_prob_G14 = null_prob_G14
-        self.null_prob_T5 = null_prob_T5
+        self.null_prob_pooled = null_prob_pooled
+        self.null_prob_gemma = null_prob_gemma
+        self.null_prob_bert = null_prob_bert
         self.use_amp = use_amp
         self.wandb_name = wandb_name
         self.log_steps = log_steps
@@ -268,6 +269,10 @@ class model_trainer():
         else:
             self.grad_scaler = None
 
+        # Load in the EMA model if it exists
+        if load_ema_file:
+            self.ema_model_cpu.load_state_dict(torch.load(load_ema_file, map_location="cpu"))
+
         # Load in optimizer paramters if they exist
         if optimFile:
             self.optim.load_state_dict(torch.load(optimFile, map_location=self.device))
@@ -342,7 +347,7 @@ class model_trainer():
             # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
             # dist.barrier(self.subgroup)
             batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, 256//8, 256//8), dtype=torch.float16, device=self.device)
-            batch_txt = torch.empty((self.batchSize, 128, 2304), dtype=torch.float16, device=self.device)
+            batch_txt = torch.empty((self.batchSize, 77*2, 2304), dtype=torch.float16, device=self.device)
             batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
             request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
             # Send request flag
@@ -363,9 +368,11 @@ class model_trainer():
 
             # Probability of each of the text embeddings being null
             probs_pooled = torch.rand(batch_x_0.shape[0])
-            probs_dual = torch.rand(batch_x_0.shape[0])
-            nullCls_pooled = torch.where(probs_pooled < 0.1, 1, 0).to(torch.bool).to(self.device)
-            nullCls_dual = torch.where(probs_dual < 0.1, 1, 0).to(torch.bool).to(self.device)
+            probs_gemma = torch.rand(batch_x_0.shape[0])
+            probs_bert = torch.rand(batch_x_0.shape[0])
+            nullCls_pooled = torch.where(probs_pooled < self.null_prob_pooled, 1, 0).to(torch.bool).to(self.device)
+            nullCls_gemma = torch.where(probs_gemma < self.null_prob_gemma, 1, 0).to(torch.bool).to(self.device)
+            nullCls_bert = torch.where(probs_bert < self.null_prob_bert, 1, 0).to(torch.bool).to(self.device)
             
 
             # Noise the batch to time t
@@ -377,7 +384,7 @@ class model_trainer():
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_dual)
+                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_gemma, nullCls_bert)
 
                 # The label is the velocity: 
                 # v_t = alpha_t' * x + sigma_t' * epsilon_t
@@ -482,10 +489,11 @@ class model_trainer():
                             ema_param.data.mul_(self.ema_decay).add_(param.cpu().data, alpha=(1.0 - self.ema_decay))
 
 
-            # Save the EMA model and graph every number of desired steps
+            # Save the model and graph every number of desired steps
             if num_steps%self.numSaveSteps == 0 and is_main_process(self.subgroup):
-                self.ema_model_cpu.wandb_id = self.wandb_id
-                self.ema_model_cpu.saveModel(self.saveDir, self.optim, self.scheduler, self.grad_scaler, num_steps)
+                self.model.module.wandb_id = self.wandb_id
+                self.model.wandb_id = self.wandb_id
+                self.model.module.saveModel(saveDir=self.saveDir, EMA_state_dict=self.ema_model_cpu.state_dict(), optimizer=self.optim, scheduler=self.scheduler, grad_scalar=self.grad_scaler, step=num_steps)
                 # self.graph_losses()
 
                 print("Saving model")

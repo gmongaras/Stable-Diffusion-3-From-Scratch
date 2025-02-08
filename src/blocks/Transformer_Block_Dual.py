@@ -12,7 +12,7 @@ from xformers.ops.swiglu_op import SwiGLU
 
 
 class Transformer_Block_Dual(nn.Module):
-    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, positional_encoding="absolute", checkpoint_MLP=True, layer_idx=None, last=False):
+    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, positional_encoding="absolute", kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, layer_idx=None, last=False):
         super().__init__()
 
         self.checkpoint_MLP = checkpoint_MLP
@@ -25,7 +25,7 @@ class Transformer_Block_Dual(nn.Module):
         self.MLP_x = SwiGLU(dim, int(dim*hidden_scale), dim)
         if not self.last:
             self.MLP_c = SwiGLU(dim, int(dim*hidden_scale), dim)
-        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal, positional_encoding=positional_encoding, layer_idx=layer_idx, dual=True, last=last)
+        self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, layer_idx=layer_idx, dual=True, last=last)
         
         # Two layer norms
         self.norm1_x = Norm(dim, c_dim)
@@ -34,7 +34,7 @@ class Transformer_Block_Dual(nn.Module):
         if not self.last:
             self.norm2_c = Norm(dim, c_dim)
 
-        # Scale params
+        # GLU gates
         self.scale1_x = nn.Linear(c_dim, dim, bias=False)
         self.scale2_x = nn.Linear(c_dim, dim, bias=False)
         if not self.last:
