@@ -28,12 +28,15 @@ data/Imagenet21K/
 !data/Imagenet21K/README.md
 data/laion/laion-metadata/
 data/cc12m_and_imagenet21K/
+data/cc12m_and_imagenet21K_highqual/
+data/cc12m_and_imagenet21K_highqual_256/
 data/laion/relaion2B-en-research-data/
 data/laion/relaion2B-en-research-data-sharded/
 data/laion/tmp/
 data/laion/img2dataset.pex
 data/Stable_Diffusion_3_Recaption
 data/cc12m.tsv
+src/models/
 
 !.gitignore
 !models/README.md

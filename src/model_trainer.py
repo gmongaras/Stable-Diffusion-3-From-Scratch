@@ -17,14 +17,9 @@ import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.dataloader import DataLoader
 
-try:
-    from helpers.multi_gpu_helpers import is_main_process
-    from helpers.TimeSampler import TimeSampler
-    from helpers.VAE_T5_CLIP import VAE_T5_CLIP
-except ModuleNotFoundError:
-    from .helpers.multi_gpu_helpers import is_main_process
-    from .helpers.TimeSampler import TimeSampler
-    from .helpers.VAE_T5_CLIP import VAE_T5_CLIP
+from helpers.multi_gpu_helpers import is_main_process
+from helpers.TimeSampler import TimeSampler
+from helpers.VAE_T5_CLIP import VAE_T5_CLIP
 
 
 cpu = torch.device('cpu')
@@ -342,41 +337,50 @@ class model_trainer():
             # for step, data in enumerate(tqdm(data_loader, initial=num_steps, total=self.totalSteps)):
             step = step + self.start_step
 
-            # Get the data
-            # data = self.VAE_T5_CLIP.load_data().to(self.device)
-            # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
-            # dist.barrier(self.subgroup)
-            batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, 256//8, 256//8), dtype=torch.float16, device=self.device)
-            batch_txt = torch.empty((self.batchSize, 77*2, 2304), dtype=torch.float16, device=self.device)
-            batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
-            request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
-            # Send request flag
-            dist.send(request_flag, dst=self.loader_gpu)
-            # Get the data
-            dist.recv(batch_x_0, src=self.loader_gpu)
-            dist.recv(batch_txt, src=self.loader_gpu)
-            dist.recv(batch_txt_pooled, src=self.loader_gpu)
-            # dist.barrier(self.subgroup)
-            # Increate the number of steps taken
-            num_steps += 1
-            
-            # # Get a random value between 0 and 1
-            # t_vals = torch.rand(batch_x_0.shape[0], device=batch_x_0.device)
-            # Weighted timestep, still betwee 0 and 1
-            t_vals = self.time_sampler(batch_x_0.shape[0])
-
-
-            # Probability of each of the text embeddings being null
-            probs_pooled = torch.rand(batch_x_0.shape[0])
-            probs_gemma = torch.rand(batch_x_0.shape[0])
-            probs_bert = torch.rand(batch_x_0.shape[0])
-            nullCls_pooled = torch.where(probs_pooled < self.null_prob_pooled, 1, 0).to(torch.bool).to(self.device)
-            nullCls_gemma = torch.where(probs_gemma < self.null_prob_gemma, 1, 0).to(torch.bool).to(self.device)
-            nullCls_bert = torch.where(probs_bert < self.null_prob_bert, 1, 0).to(torch.bool).to(self.device)
-            
-
-            # Noise the batch to time t
             with torch.no_grad():
+                # Get the data
+                # data = self.VAE_T5_CLIP.load_data().to(self.device)
+                # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
+                # dist.barrier(self.subgroup)
+                batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, 256//8, 256//8), dtype=torch.float16, device=self.device)
+                batch_txt = torch.empty((self.batchSize, 77*2, 2304), dtype=torch.float16, device=self.device)
+                batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
+                request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
+                # Send request flag
+                dist.send(request_flag, dst=self.loader_gpu)
+                # Get the data
+                dist.recv(batch_x_0, src=self.loader_gpu)
+                dist.recv(batch_txt, src=self.loader_gpu)
+                dist.recv(batch_txt_pooled, src=self.loader_gpu)
+                orig_shape = (
+                    self.batchSize,
+                    self.model.module.inCh,
+                    batch_x_0.shape[2] - (batch_x_0[0,0] == torch.inf).sum(-2)[0].item(),
+                    batch_x_0.shape[3] - (batch_x_0[0,0] == torch.inf).sum(-1)[0].item(),
+                )
+                # Apply mask to ge the unmasked latents
+                batch_x_0 = batch_x_0[batch_x_0 != torch.inf].reshape(orig_shape)
+                # dist.barrier(self.subgroup)
+                # Increate the number of steps taken
+                num_steps += 1
+                
+                # # Get a random value between 0 and 1
+                # t_vals = torch.rand(batch_x_0.shape[0], device=batch_x_0.device)
+                # Weighted timestep, still betwee 0 and 1
+                t_vals = self.time_sampler(batch_x_0.shape[0])
+
+
+                # Probability of each of the text embeddings being null
+                probs_pooled = torch.rand(batch_x_0.shape[0])
+                probs_gemma = torch.rand(batch_x_0.shape[0])
+                # probs_bert = torch.rand(batch_x_0.shape[0])
+                probs_bert = probs_gemma
+                nullCls_pooled = torch.where(probs_pooled < self.null_prob_pooled, 1, 0).to(torch.bool).to(self.device)
+                nullCls_gemma = torch.where(probs_gemma < self.null_prob_gemma, 1, 0).to(torch.bool).to(self.device)
+                nullCls_bert = torch.where(probs_bert < self.null_prob_bert, 1, 0).to(torch.bool).to(self.device)
+            
+
+                # Noise the batch to time t
                 if self.dev == "cpu":
                     batch_x_t, epsilon_t = self.model.noise_batch(batch_x_0, t_vals)
                 else:

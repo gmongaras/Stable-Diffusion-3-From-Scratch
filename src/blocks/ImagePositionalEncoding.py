@@ -142,6 +142,8 @@ class PatchEmbed(nn.Module):
             self.pos_embed = None
         elif pos_embed_type == "NoPE":
             self.pos_embed = None
+        elif pos_embed_type == "RoPE2d":
+            self.pos_embed = None
         else:
             raise ValueError(f"Unsupported pos_embed_type: {pos_embed_type}")
 

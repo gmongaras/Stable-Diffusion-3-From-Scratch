@@ -1,3 +1,4 @@
+import torchvision.transforms.functional
 from transformers import CLIPProcessor, CLIPModel, AutoProcessor, BitsAndBytesConfig, ModernBertModel
 from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
 from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast
@@ -6,6 +7,7 @@ import open_clip
 import torch
 import torch.nn.functional as F
 from diffusers import AutoencoderKL
+# from src.Autoencoder.autoencoder_kl import AutoencoderKL
 import threading
 import torchvision
 from torch.utils.data import DataLoader
@@ -23,6 +25,7 @@ from PIL import Image
 from PIL import PngImagePlugin
 import os
 import random
+import src.helpers.dataset_utils as dataset_utils
 os.environ["TORCH_DYNAMO_MULTI_GPU_SAFE"] = "1"
 
 # Needed to prevent error with large text chunks - I just set it to a shit ton
@@ -55,6 +58,13 @@ class Data:
 
 
 
+
+def resize_nearest_multiple(x, v):
+    """Resize image so that each side is the nearest multiple of v."""
+    c, h, w = x.shape
+    new_h = ((h + v - 1) // v) * v  # Round up to nearest multiple of v
+    new_w = ((w + v - 1) // v) * v
+    return torchvision.transforms.functional.resize(x, (new_h, new_w))
 
 
 
@@ -225,8 +235,12 @@ class VAE_T5_CLIP:
 
 
         # Gemma 2B - https://huggingface.co/google/gemma-2-2b
-        with open(".env", "r") as f:
-            token = f.read().strip()
+        try:
+            with open(".env", "r") as f:
+                token = f.read().strip()
+        except:
+            with open("../.env", "r") as f:
+                token = f.read().strip()
         self.Gemma_tokenizer = GemmaTokenizerFast.from_pretrained("google/gemma-2-2b", cache_dir="./models/Gemma2b", legacy=False, token=token, padding_side="right")
         self.Gemma_model = Gemma2Model.from_pretrained(
             "google/gemma-2-2b", 
@@ -292,18 +306,23 @@ class VAE_T5_CLIP:
 
 
 
+
     # This function will run forever and continually add data to the data buffer
     @torch.no_grad()
     @torch.inference_mode()
     def load_data(self):
         # Create a sampler and loader over the dataset
         transforms = torchvision.transforms.Compose([
-            # Resize the shorter side to 256 with bicubic interpolation
-            torchvision.transforms.Resize(256, interpolation=torchvision.transforms.InterpolationMode.BICUBIC),
-            # Center crop to 256 x 256
-            torchvision.transforms.CenterCrop((256, 256)),
+            # # Resize so the largest side is 256
+            # torchvision.transforms.Resize(256-self.VAE_downsample*2, max_size=256),
+            # # Resize the shorter side to 256 with bicubic interpolation
+            # torchvision.transforms.Resize(256, interpolation=torchvision.transforms.InterpolationMode.BICUBIC),
+            # # Center crop to 256 x 256
+            # torchvision.transforms.CenterCrop((256, 256)),
             # Convert to tensor
             torchvision.transforms.ToTensor(),
+            # # Resize to the nearest multiple of the VAE downsample factor * the patch size (2)
+            # torchvision.transforms.Lambda(lambda x: resize_nearest_multiple(x, self.VAE_downsample*2)),
             # Data already in range [0, 1]. Make between -1 and 1
             torchvision.transforms.Lambda(lambda x: 2*x - 1.0)
         ])
@@ -321,7 +340,10 @@ class VAE_T5_CLIP:
         ###       if "__index_level_0__" in pa_table.column_names:
         ###           pa_table = pa_table.drop(['__index_level_0__'])
         ### Which will remove the index column from the table if it exists
-        dataset = datasets.load_dataset("parquet", data_files=f"data/cc12m_and_imagenet21K/*.parquet", cache_dir="data/cache", split="train")
+        # dataset = datasets.load_dataset("parquet", data_files=f"data/cc12m_and_imagenet21K/*.parquet", cache_dir="data/cache", split="train")
+        bucket_path = "data/bucket_indices_256.npy"
+        parquet_folder = "data/cc12m_and_imagenet21K_highqual_256"
+        dataset = datasets.load_dataset("parquet", data_files=f"{parquet_folder}/*.parquet", cache_dir="data/cache", split="train", num_proc=64)
         def transform_img(img):
             img = Image.open(io.BytesIO(img))
             img_ = transforms(img)
@@ -344,10 +366,37 @@ class VAE_T5_CLIP:
         def collate_fn(batch):
             return torch.stack([transform_img(b["image"]) for b in batch]), \
                 [b["recaption_short"].strip() for b in batch]
-        data_loader = DataLoader(dataset, batch_size=self.batchSize*self.num_batches,
+            batch = [transform_img(b["image"]) for b in batch], \
+                [b["recaption_short"].strip() for b in batch]
+            # Get the largest image height and largest image width in the batch
+            max_h = max([b.shape[1] for b in batch[0]])
+            max_w = max([b.shape[2] for b in batch[0]])
+            # Pad all images to the largest image height and largest image width in the batch and get a padding mask
+            padded = torch.zeros((len(batch[0]), 3, max_h, max_w), dtype=torch.float16)
+            padding_mask = torch.zeros((len(batch[0]), max_h, max_w), dtype=torch.bool)
+            for i, b in enumerate(batch[0]):
+                padded[i, :, :b.shape[1], :b.shape[2]] = b
+                padding_mask[i, :b.shape[1], :b.shape[2]] = True
+            padding_mask_downsampled = padding_mask[:, ::self.VAE_downsample, ::self.VAE_downsample]
+            return padded, batch[0], batch[1], padding_mask, padding_mask_downsampled
+        # data_loader = DataLoader(dataset, batch_size=self.batchSize*self.num_batches,
+        #     pin_memory=True,
+        #     drop_last=False, 
+        #     sampler=torch.utils.data.RandomSampler(dataset, replacement=True, num_samples=9999999999999999),
+
+        #     num_workers=10,
+        #     prefetch_factor=10,
+        #     persistent_workers=True,
+        #     collate_fn=collate_fn
+        # )
+        
+        dataset_utils.load_indices(bucket_path, dataset)
+        hf_dataset = dataset_utils.HuggingFaceDataset(dataset)
+        sampler = dataset_utils.RandomBucketSampler(bucket_path, dataset, self.batchSize*self.num_batches)
+        data_loader = DataLoader(hf_dataset, 
+            batch_sampler=sampler, 
             pin_memory=True,
-            drop_last=False, 
-            sampler=torch.utils.data.RandomSampler(dataset, replacement=True, num_samples=9999999999999999),
+            drop_last=False,
 
             num_workers=10,
             prefetch_factor=10,
@@ -380,7 +429,9 @@ class VAE_T5_CLIP:
         # Iterate forever
         for data in data_loader:
             batch_x_0, batch_text = data
+            # batch_x_0_, batch_x_0, batch_text, padding_mask, padding_mask_downsampled = data
             batch_x_0 = batch_x_0.to(dtype=torch.float16, device=self.device)
+            # batch_x_0_ = batch_x_0_.to(dtype=torch.float16, device=self.device)
 
             # Encode text using Gemma - (B, 77, 2304)
             text_hidden_Gemma = self.Gemma_encode_text(batch_text)
@@ -397,7 +448,11 @@ class VAE_T5_CLIP:
             # Get sample from latent distribution using the reparameterization trick
             # Normalize the latent representation
             # (B, 3, L, W) -> (B, 16, L//8, W//8)
+            # batch_x_0__out = self.forward_VAE_and_sample(batch_x_0_, (~padding_mask[:, None, :, :]).to(batch_x_0_.device))
             batch_x_0 = self.forward_VAE_and_sample(batch_x_0)
+            # Pad latents to be of shape (256//8, 256//8). This is the max size so that
+            # the GPU sync works properly.
+            batch_x_0 = F.pad(batch_x_0, (0, 256//8-batch_x_0.shape[-1], 0, 256//8-batch_x_0.shape[-2]), value=torch.inf)
 
             # Get pooled embedding from CLIP - (B, 768)
             text_pooled = self.CLIP_encode_text(batch_text)
@@ -411,6 +466,6 @@ class VAE_T5_CLIP:
             text_pooled = text_pooled.split(self.batchSize)
             # Send data directly to each process
             for i, pipe in enumerate(pipes):
-                pipe.send({"images": batch_x_0[i], "text": text[i], "text_pooled": text_pooled[i]})
+                pipe.send({"images": batch_x_0[i].half(), "text": text[i].half(), "text_pooled": text_pooled[i].half()})
 
 

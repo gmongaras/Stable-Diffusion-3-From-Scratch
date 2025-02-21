@@ -42,9 +42,9 @@ class Transformer_Block_Dual(nn.Module):
             self.scale2_c = nn.Linear(c_dim, dim, bias=False)
 
         
-    def forward(self, X, c, y):
+    def forward(self, X, c, y, orig_shape):
         # Attn layer
-        X_, c_ = self.attn(self.norm1_x(X, y), self.norm1_c(c, y))
+        X_, c_ = self.attn(self.norm1_x(X, y), self.norm1_c(c, y), orig_shape)
         X = (X_ * self.scale1_x(y)[:, None, :]) + X
         if not self.last:
             c = (c_ * self.scale1_c(y)[:, None, :]) + c

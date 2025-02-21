@@ -2,7 +2,8 @@ import torch
 from torch import nn
 from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 from src.blocks.patchify import patchify, unpatchify
-from src.blocks.rotary_embedding import RotaryEmbedding
+from src.blocks.rotary_embedding import RotaryEmbedding, apply_rotary_emb
+import src.blocks.rotary_embedding_2d as rotary_embedding_2d
 
 
 class Attention(nn.Module):
@@ -82,12 +83,21 @@ class Attention(nn.Module):
 
         # Rotary embeddings
         if positional_encoding == "RoPE":
-            self.rotary_emb = RotaryEmbedding(self.head_dim_qk)
+            self.rotary_emb = RotaryEmbedding(self.head_dim_qk, use_xpos=False)
+        if positional_encoding == "RoPE2d":
+            # Divide by 2 since we are applying to two dimensions. One to one half, the other to the other half
+            self.rotary_emb = RotaryEmbedding(self.head_dim_qk//2, use_xpos=False)
+            # self.rotary_emb = rotary_embedding_2d.precompute_freqs_cis_2d(
+            #     dim=self.head_dim_qk,
+            #     height=1024//8,
+            #     width=1024//8,
+            #     theta=100_000.0,
+            # )
         
         
         
         
-    def forward(self, x, c=None):
+    def forward(self, x, c=None, orig_shape=None):
         B, N, d = x.shape
         B, M, d = c.shape if self.dual else (B, N, d)
 
@@ -139,9 +149,57 @@ class Attention(nn.Module):
             if self.dual:
                 queries_x = self.rotary_emb.rotate_queries_or_keys(queries_x)
                 keys_x = self.rotary_emb.rotate_queries_or_keys(keys_x)
+                # queries_x, keys_x = self.rotary_emb.rotate_queries_and_keys(queries_x, keys_x, seq_dim=-2)
             else:
                 queries[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(queries[:, :, :N])
                 keys[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(keys[:, :, :N])
+                # queries[:, :, :N], keys[:, :, :N] = self.rotary_emb.rotate_queries_and_keys(queries[:, :, :N], keys[:, :, :N], seq_dim=-2)
+        if self.positional_encoding == "RoPE2d":
+            if self.dual:
+                #"""
+                # The height and width are divded by 2 since the patch size is 2
+                height = orig_shape[-2] // 2
+                width = orig_shape[-1] // 2
+
+                # Convert back to a 2D image.
+                queries_x = queries_x.reshape(B, self.num_heads, height, width, self.head_dim_qk)
+                keys_x = keys_x.reshape(B, self.num_heads, height, width, self.head_dim_qk)
+                
+                # Get the frequencies
+                freqs = self.rotary_emb.get_axial_freqs(height, width)
+
+                # Apply RoPE
+                queries_x = apply_rotary_emb(freqs, queries_x)
+                keys_x = apply_rotary_emb(freqs, keys_x)
+
+                # Flatten back to (B, H, N, d)
+                queries_x = queries_x.reshape(B, self.num_heads, -1, self.head_dim_qk)
+                keys_x = keys_x.reshape(B, self.num_heads, -1, self.head_dim_qk)
+                """
+
+                # The height and width are divded by 2 since the patch size is 2
+                height = orig_shape[-2] // 2
+                width = orig_shape[-1] // 2
+
+                # Convert back to a 2D image.
+                queries_x = queries_x.reshape(B, self.num_heads, height, width, self.head_dim_qk)
+                keys_x = keys_x.reshape(B, self.num_heads, height, width, self.head_dim_qk)
+                
+                # Get the frequencies
+                freqs = self.rotary_emb[:height, :width].to(queries_x.device)
+
+                # Apply RoPE
+                queries_x, keys_x = rotary_embedding_2d.apply_rotary_emb(queries_x, keys_x, freqs)
+
+                # Flatten back to (B, H, N, d)
+                queries_x = queries_x.reshape(B, self.num_heads, -1, self.head_dim_qk)
+                keys_x = keys_x.reshape(B, self.num_heads, -1, self.head_dim_qk)
+                """
+            else:
+                assert False
+                # queries[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(queries[:, :, :N])
+                # keys[:, :, :N] = self.rotary_emb.rotate_queries_or_keys(keys[:, :, :N])
+                queries[:, :, :N], keys[:, :, :N] = self.rotary_emb.rotate_queries_and_keys(queries[:, :, :N], keys[:, :, :N], seq_dim=-2)
         # No positional encoding for the text
 
         # If merging, we merge the keys and values along the sequence dimension

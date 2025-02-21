@@ -95,7 +95,7 @@ class diff_model(nn.Module):
         self.wandb_id = wandb_id
 
         # Positional encoding assert
-        assert positional_encoding in ["absolute", "RoPE", "NoPE"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE'"
+        assert positional_encoding in ["absolute", "RoPE", "NoPE", "RoPE2d"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE' or 'RoPE2d'"
         
         # Important default parameters
         self.defaults = {
@@ -320,7 +320,7 @@ class diff_model(nn.Module):
 
         # Send the patches through the transformer blocks
         for i, block in enumerate(self.blocks):
-            x_t, c = block(x_t, c, y)
+            x_t, c = block(x_t, c, y, orig_shape)
             
         # Send the output through the output projection
         x_t = self.out_proj(self.out_norm(x_t, y))
@@ -350,14 +350,15 @@ class diff_model(nn.Module):
     #   imgs - (only if save_intermediate=True) list of iternediate
     #          outputs for the first image i the batch of shape (steps, C, L, W)
     @torch.no_grad()
-    def sample_imgs(self, batchSize, num_steps, text_input, cfg_scale=0.0, save_intermediate=False, use_tqdm=False, sampler="euler", generator=None):
+    def sample_imgs(self, batchSize, num_steps, text_input, cfg_scale=0.0, width=256, height=256, save_intermediate=False, use_tqdm=False, sampler="euler", generator=None):
         use_vae = True
         
         # Make sure the model is in eval mode
         self.eval()
 
         # The initial image is pure noise
-        h = w = 256
+        h = width
+        w = height
         output = torch.randn((batchSize, self.text_encoders.VAE.config.latent_channels if use_vae else 3, h//8 if use_vae else h, w//8 if use_vae else w), generator=generator).to(self.device)
         eps = output.clone()
 

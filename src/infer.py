@@ -22,6 +22,8 @@ import random
 @click.option("--num_steps", "num_steps", type=int, default=10, help="Number of steps to generate an image", required=False)
 @click.option("--device", "device", type=str, default="gpu", help="Device to put the model on. use \"gpu\" or \"cpu\".", required=False)
 @click.option("--guidance", "w", type=float, default=4, help="Classifier guidance scale which must be >= 0. The higher the value, the better the image quality, but the lower the image diversity.", required=False)
+@click.option("--width", "width", type=int, default=256, help="width", required=False)
+@click.option("--height", "height", type=int, default=256, help="height", required=False)
 @click.option("--sampler", "sampler", type=str, default="euler a", help="Sampler to use for generation.", required=False)
 @click.option("--seed", "seed", type=int, default=-1, help="Seed for the random number generator.", required=False)
 @click.option("--batch_size", "batch_size", type=int, default=2, help="Batch size for generation", required=False)
@@ -39,6 +41,8 @@ def infer(
     num_steps: int,
     device: str,
     w: float,
+    width,
+    height,
     text_input: int,
     sampler: str,
     seed: int,
@@ -48,6 +52,9 @@ def infer(
     out_gifname: str,
     gif_fps: int
     ):
+
+
+    save_intermediate = True
 
     
     
@@ -102,7 +109,7 @@ def infer(
         generator = None
 
     # Sample the model
-    noise, imgs = model.sample_imgs(batch_size, num_steps, text_input, w, True, True, sampler, generator)
+    noise, imgs = model.sample_imgs(batch_size, num_steps, text_input, w, width, height, save_intermediate, True, sampler, generator)
             
     # Convert the sample image to 0->255
     # and show it

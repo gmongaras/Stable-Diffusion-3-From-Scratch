@@ -11,7 +11,8 @@ from typing import List
 
 def train():
     totalSteps = 250_000
-    batchSize = 120
+    # batchSize = 110
+    batchSize = 80
     inCh = 16
     # num_loader_gpus = 2
     # num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
@@ -39,7 +40,8 @@ def train():
     attn_type = "cosine"
     device = "gpu"
     # wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag_Merge"
-    wandb_name = "datav2_attempt2_8GPU_Cos_Redo"
+    #wandb_name = "datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
+    wandb_name = "datav3_attempt2_8GPU_SoftFlash_RoPE2d"
     log_steps = 10
     null_prob_pooled = 0.1
     null_prob_gemma = 0.1
@@ -50,21 +52,23 @@ def train():
     ema_decay = 0.99
     warmup_steps = 1000
     checkpoint_MLP = True
-    positional_encoding = "RoPE" # "absolute" or "RoPE" or "NoPE"
+    positional_encoding = "RoPE2d" # "absolute" or "RoPE" or "NoPE" or "RoPE2d"
     kv_merge_attn = False
     qk_half_dim = False
 
     numSaveSteps = 1000
-    saveDir = "models/datav2_attempt2_8GPU_Cos_Redo"
+    #saveDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
+    saveDir = "models/datav3_attempt2_8GPU_SoftFlash_RoPE2d"
 
     loadModel = True
-    loadDir = "models/datav2_attempt2_8GPU_Cos_Redo"
-    loadFile = "model_50000s.pkl"
-    load_ema_file = "model_ema_50000s.pkl"
-    loadDefFile = "model_params_50000s.json"
-    optimFile = "optim_50000s.pkl"
-    schedulerFile = "scheduler_50000s.pkl"
-    scalerFile = "scaler_50000s.pkl"
+    #loadDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
+    loadDir = "models/datav3_attempt2_8GPU_SoftFlash_RoPE2d"
+    loadFile = "model_81000s.pkl"
+    load_ema_file = "model_ema_81000s.pkl"
+    loadDefFile = "model_params_81000s.json"
+    optimFile = "optim_81000s.pkl"
+    schedulerFile = "scheduler_81000s.pkl"
+    scalerFile = "scaler_81000s.pkl"
     
     
     
