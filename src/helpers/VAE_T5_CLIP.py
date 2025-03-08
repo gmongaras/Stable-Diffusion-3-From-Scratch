@@ -83,7 +83,17 @@ def wait_gpu_n(n, device, parent_conn):
         # if not data_queue.empty():
         # Get data from the queue
         # next_data = data_queue.get()
+
+        # # If the model requests data faster than the dataloader is preparing it,
+        # # this can run into a race condition.
+        # total_seconds = 0
+        # while not parent_conn.poll():
+        #     time.sleep(0.1)  # Small delay to prevent busy waiting
+        #     total_seconds += 0.1
+        #     if total_seconds == 60: # Should never take a whole minute
+        #         raise(f"Issue on gpu {n} when waiting for data from parent")
         next_data = parent_conn.recv()
+
         # Send data to GPU
         dist.send(next_data["images"], dst=n)
         dist.send(next_data["text"], dst=n)
@@ -294,6 +304,10 @@ class VAE_T5_CLIP:
 
         # Load data forever
         self.load_data()
+
+
+        # This should never be reached
+        raise "Load data stopped for some reason. This is usually an issue with the shapes on the receiving end (the model) not being the same as the data being sent here (Ex: different batch size)"
     
 
 
@@ -420,7 +434,7 @@ class VAE_T5_CLIP:
 
         # Start the send_data process for each GPU and keep a connection to each process
         for gpu in self.gpus:
-            parent_conn, child_conn = ctx.Pipe()  # Create a Pipe
+            parent_conn, child_conn = ctx.Pipe(duplex=True)  # Create a Pipe
             pipes.append(parent_conn)
             process = ctx.Process(target=send_data_process, args=(child_conn, self.device, self.rank, self.world_size, gpu))
             processes.append(process)

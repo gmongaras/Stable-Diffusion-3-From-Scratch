@@ -30,6 +30,8 @@ data/laion/laion-metadata/
 data/cc12m_and_imagenet21K/
 data/cc12m_and_imagenet21K_highqual/
 data/cc12m_and_imagenet21K_highqual_256/
+data/cc12m_and_imagenet21K_highqual_512/
+data/cc12m_and_imagenet21K_highqual_1024/
 data/laion/relaion2B-en-research-data/
 data/laion/relaion2B-en-research-data-sharded/
 data/laion/tmp/

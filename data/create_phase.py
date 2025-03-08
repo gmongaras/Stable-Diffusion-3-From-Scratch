@@ -15,7 +15,7 @@ PngImagePlugin.MAX_TEXT_CHUNK = 999999 * (1024**2)
 
 
 input_dir = "data/cc12m_and_imagenet21K_highqual/"
-max_resolution = 256
+max_resolution = 512
 patch_size = 16
 output_dir = f"data/cc12m_and_imagenet21K_highqual_{max_resolution}/"
 

@@ -85,7 +85,7 @@ class diff_model(nn.Module):
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, num_blocks, device, positional_encoding, kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, start_step=0, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, MLP_type, num_blocks, device, positional_encoding, kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, start_step=0, wandb_id=None):
         super(diff_model, self).__init__()
         
         self.inCh = inCh
@@ -95,8 +95,11 @@ class diff_model(nn.Module):
         self.wandb_id = wandb_id
 
         # Positional encoding assert
-        assert positional_encoding in ["absolute", "RoPE", "NoPE", "RoPE2d"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE' or 'RoPE2d'"
+        assert positional_encoding in ["absolute", "RoPE", "NoPE", "RoPE2d", "RoPE2dV2"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE' or 'RoPE2d' or 'RoPE2dV2'"
         
+        assert MLP_type in ["gelu", "swiglu", "swiglu_old"]
+        self.legacy_MLP = MLP_type == "swiglu_old"
+
         # Important default parameters
         self.defaults = {
             "inCh": inCh,
@@ -106,6 +109,7 @@ class diff_model(nn.Module):
             "hidden_scale": hidden_scale,
             "num_heads": num_heads,
             "attn_type": attn_type,
+            "MLP_type": MLP_type,
             "num_blocks": num_blocks,
             "positional_encoding": positional_encoding,
             "kv_merge_attn": kv_merge_attn,
@@ -140,7 +144,7 @@ class diff_model(nn.Module):
         
         # Transformer blocks
         self.blocks = nn.ModuleList([
-            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
+            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, MLP_type=MLP_type, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
             for i in range(num_blocks)
         ])
             
@@ -194,6 +198,8 @@ class diff_model(nn.Module):
             pos_embed_type=positional_encoding,
             pos_embed_max_size=256
         ).to(device)
+        # Input norm
+        # self.in_norm = nn.RMSNorm(dim) if not self.legacy_MLP else nn.Identity()
         # Output norm
         self.out_norm = Norm(dim, dim).to(device)
         # Output projection
@@ -542,6 +548,8 @@ class diff_model(nn.Module):
             with open(loadDir + os.sep + loadDefFile, "r") as f:
                 self.defaults = json.load(f)
             D = self.defaults
+            if "MLP_type" not in D:
+                D["MLP_type"] = "swiglu_old"
 
             # Reinitialize the model with the new defaults
             self.__init__(**D)
@@ -550,7 +558,7 @@ class diff_model(nn.Module):
             self.dev = dev_
 
             # Load the model state
-            self.load_state_dict(torch.load(loadDir + os.sep + loadFile, map_location=self.device), strict=True)
+            self.load_state_dict(torch.load(loadDir + os.sep + loadFile, map_location=self.device, weights_only=False), strict=True)
 
         else:
-            self.load_state_dict(torch.load(loadDir + os.sep + loadFile, map_location=self.device), strict=True)
+            self.load_state_dict(torch.load(loadDir + os.sep + loadFile, map_location=self.device, weights_only=False), strict=True)

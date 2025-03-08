@@ -10,9 +10,10 @@ from typing import List
 
 
 def train():
-    totalSteps = 250_000
+    totalSteps = 150_000
     # batchSize = 110
-    batchSize = 80
+    batchSize = 70
+    accumulation_steps = 2
     inCh = 16
     # num_loader_gpus = 2
     # num_model_gpus_per_loader = 3 # Total GPU count = num_loader_gpus + num_loader_gpus * num_model_gpus_per_loader
@@ -37,38 +38,42 @@ def train():
     dim = int(64*num_blocks)
     hidden_scale = 4.0
     num_heads = num_blocks
-    attn_type = "cosine"
+    attn_type = "softmax_flash"
+    MLP_type = "swiglu" # gelu or swiglu
     device = "gpu"
     # wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag_Merge"
     #wandb_name = "datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    wandb_name = "datav3_attempt2_8GPU_SoftFlash_RoPE2d"
+    wandb_name = "datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
     log_steps = 10
+    # The original paper used 0.464 because 0.464*0.464*0.464 ~= 0.1 for three parts.
+    # We want to mask about 10% of the time. Since there's only one pooled, that's just 0.1
+    # and since there's two parts to the big embedding, that would be about 0.316
     null_prob_pooled = 0.1
-    null_prob_gemma = 0.1
-    null_prob_bert = 0.1
+    null_prob_gemma = 0.316
+    null_prob_bert = 0.316
     lr = 1e-4
     use_lr_scheduler = False
     ema_update_freq = 100
     ema_decay = 0.99
     warmup_steps = 1000
     checkpoint_MLP = True
-    positional_encoding = "RoPE2d" # "absolute" or "RoPE" or "NoPE" or "RoPE2d"
+    positional_encoding = "RoPE2dV2" # "absolute" or "RoPE" or "NoPE" or "RoPE2d" or "RoPE2dV2"
     kv_merge_attn = False
     qk_half_dim = False
 
     numSaveSteps = 1000
     #saveDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    saveDir = "models/datav3_attempt2_8GPU_SoftFlash_RoPE2d"
+    saveDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
 
     loadModel = True
     #loadDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    loadDir = "models/datav3_attempt2_8GPU_SoftFlash_RoPE2d"
-    loadFile = "model_81000s.pkl"
-    load_ema_file = "model_ema_81000s.pkl"
-    loadDefFile = "model_params_81000s.json"
-    optimFile = "optim_81000s.pkl"
-    schedulerFile = "scheduler_81000s.pkl"
-    scalerFile = "scaler_81000s.pkl"
+    loadDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
+    loadFile = "model_146000s.pkl"
+    load_ema_file = "model_ema_146000s.pkl"
+    loadDefFile = "model_params_146000s.json"
+    optimFile = "optim_146000s.pkl"
+    schedulerFile = "scheduler_146000s.pkl"
+    scalerFile = "scaler_146000s.pkl"
     
     
     
@@ -81,6 +86,7 @@ def train():
         hidden_scale=hidden_scale,
         num_heads=num_heads,
         attn_type=attn_type,
+        MLP_type=MLP_type,
         num_blocks=num_blocks,
         checkpoint_MLP=checkpoint_MLP,
         positional_encoding=positional_encoding,
@@ -97,7 +103,7 @@ def train():
     trainer = model_trainer(
         diff_model=model,
         batchSize=batchSize, 
-        numSteps=1,
+        accumulation_steps=accumulation_steps,
         totalSteps=totalSteps, 
         lr=lr, 
         ema_update_freq=ema_update_freq,

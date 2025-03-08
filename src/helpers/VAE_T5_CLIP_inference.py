@@ -1,4 +1,5 @@
-from transformers import CLIPProcessor, CLIPModel, ModernBertModel
+from transformers import CLIPProcessor, CLIPModel
+from transformers import ModernBertModel
 from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
 from transformers.models.gemma2.modeling_gemma2 import Gemma2ForCausalLM
 from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast

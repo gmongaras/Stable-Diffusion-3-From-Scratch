@@ -74,6 +74,11 @@ class RandomBucketSampler(Sampler):
     def __init__(self, bucket_path, dataset, batch_size):
         # Load precomputed indices
         self.bucket_list = np.load(bucket_path, allow_pickle=True).item()
+
+        # Remove buckets smaller than the batch size
+        removed = [i for i,j in self.bucket_list.items() if len(j) <= batch_size]
+        print(f"Removing the following buckets as they are too small: {removed}")
+        self.bucket_list = {i:j for i,j in self.bucket_list.items() if len(j) > batch_size}
         
         self.bucket_list = [(bucket_size, indices) for bucket_size, indices in self.bucket_list.items()]
         self.batch_size = batch_size
@@ -90,9 +95,9 @@ class RandomBucketSampler(Sampler):
 
             # Get a random batch from the selected bucket
             _, indices = self.bucket_list[bucket_idx]
-            # Not enough samples for the batch
-            if self.batch_size > len(indices):
-                return indices
+            # # Not enough samples for the batch
+            # if self.batch_size > len(indices):
+            #     return indices
             batch_indices = random.sample(indices, self.batch_size)
             yield batch_indices
 

@@ -71,6 +71,7 @@ def infer(
     hidden_scale = 4.0
     num_heads = 8
     attn_type = "cosine"
+    MLP_type = "swiglu"
     num_blocks = 20
     positional_encoding = "RoPE"
     device = "gpu"
@@ -83,6 +84,7 @@ def infer(
         hidden_scale=hidden_scale,
         num_heads=num_heads,
         attn_type=attn_type,
+        MLP_type=MLP_type,
         num_blocks=num_blocks,
         positional_encoding=positional_encoding,
         device=device,

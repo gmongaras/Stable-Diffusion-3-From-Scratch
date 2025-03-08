@@ -105,12 +105,12 @@ def init_distributed_no_loaders(loader_gpus):
 class model_trainer():
     # diff_model - A diffusion model to train
     # batchSize - Batch size to train the model with
-    # numSteps - Number of steps to breakup the batchSize into. Instead
-    #            of taking 1 massive step where the whole batch is loaded into
-    #            memory, the batchSize is broken up into sizes of
-    #            batchSize//numSteps so that it can fit into memory. Mathematically,
-    #            the update will be the same, as a single batch update, but
-    #            the update is distributed across smaller updates to fit into memory.
+    # accumulation_steps - Number of steps to breakup the batchSize into. Instead
+    #                      of taking 1 massive step where the whole batch is loaded into
+    #                      memory, the batchSize is broken up into sizes of
+    #                      batchSize//numSteps so that it can fit into memory. Mathematically,
+    #                      the update will be the same, as a single batch update, but
+    #                      the update is distributed across smaller updates to fit into memory.
     # totalSteps - Number of steps to train the model for
     # lr - Learning rate of the model optimizer
     # device - Device to put the model and data on (gpu or cpu)
@@ -125,7 +125,7 @@ class model_trainer():
     def __init__(self, 
             diff_model, 
             batchSize, 
-            numSteps, 
+            accumulation_steps, 
             totalSteps, 
             lr, 
             ema_update_freq, 
@@ -147,9 +147,9 @@ class model_trainer():
             log_steps=10,
             loader_to_model_gpu=None):
         # Saved info
-        self.batchSize = batchSize//numSteps
-        self.numSteps = numSteps
-        self.totalSteps = totalSteps
+        self.batchSize = batchSize
+        self.accumulation_steps = accumulation_steps
+        self.totalSteps = int(totalSteps * accumulation_steps)
         self.ema_update_freq = ema_update_freq
         self.ema_decay = ema_decay
         self.warmup_steps = warmup_steps
@@ -266,23 +266,24 @@ class model_trainer():
 
         # Load in the EMA model if it exists
         if load_ema_file:
-            self.ema_model_cpu.load_state_dict(torch.load(load_ema_file, map_location="cpu"))
+            self.ema_model_cpu.load_state_dict(torch.load(load_ema_file, map_location="cpu", weights_only=False))
 
         # Load in optimizer paramters if they exist
         if optimFile:
-            self.optim.load_state_dict(torch.load(optimFile, map_location=self.device))
+            self.optim.load_state_dict(torch.load(optimFile, map_location=self.device, weights_only=False))
 
         # Load in scheduler paramters if they exist
         if schedulerFile:
-            self.scheduler.load_state_dict(torch.load(schedulerFile, map_location=self.device))
+            self.scheduler.load_state_dict(torch.load(schedulerFile, map_location=self.device, weights_only=False))
 
         # Load in scalar paramters if they exist
         if scalerFile:
-            self.grad_scaler.load_state_dict(torch.load(scalerFile, map_location=self.device))
+            self.grad_scaler.load_state_dict(torch.load(scalerFile, map_location=self.device, weights_only=False))
 
         # Load in states from the pretrained diffusion model
         self.wandb_id = self.model.wandb_id if dev == "cpu" else self.model.module.wandb_id
         self.start_step = self.model.start_step if dev == "cpu" else self.model.module.start_step
+        self.start_step = self.start_step * self.accumulation_steps
 
         # Used to sample timesteps
         self.time_sampler = TimeSampler(weighted=True)
@@ -300,10 +301,6 @@ class model_trainer():
 
         # Number of steps taken so far
         num_steps = self.start_step
-
-        # Losses over steps
-        self.losses_comb = np.array([])
-        self.steps_list = np.array([])
 
         # Cumulative loss over the batch over each set of steps
         losses_comb_s = torch.tensor(0.0, requires_grad=False)
@@ -373,8 +370,7 @@ class model_trainer():
                 # Probability of each of the text embeddings being null
                 probs_pooled = torch.rand(batch_x_0.shape[0])
                 probs_gemma = torch.rand(batch_x_0.shape[0])
-                # probs_bert = torch.rand(batch_x_0.shape[0])
-                probs_bert = probs_gemma
+                probs_bert = torch.rand(batch_x_0.shape[0])
                 nullCls_pooled = torch.where(probs_pooled < self.null_prob_pooled, 1, 0).to(torch.bool).to(self.device)
                 nullCls_gemma = torch.where(probs_gemma < self.null_prob_gemma, 1, 0).to(torch.bool).to(self.device)
                 nullCls_bert = torch.where(probs_bert < self.null_prob_bert, 1, 0).to(torch.bool).to(self.device)
@@ -422,7 +418,7 @@ class model_trainer():
             # batch for each step. If it is scaled by the step size, then the loss will
             # be treated as a part of a larger batchsize which is what we want
             # to acheive when using steps.
-            loss = loss/self.numSteps
+            loss = loss/self.accumulation_steps
 
             # Backpropagate loss
             if self.use_amp:
@@ -436,7 +432,7 @@ class model_trainer():
 
             # If the number of steps taken is a multiple of the number
             # of desired steps, update the models
-            if num_steps%self.numSteps == 0:
+            if num_steps%self.accumulation_steps == 0:
                 # Unscale gradients
                 if self.use_amp:
                     self.grad_scaler.unscale_(self.optim)
@@ -465,7 +461,7 @@ class model_trainer():
                 #     print(f"step #{num_steps}   Latest loss estimate: {round(losses_comb_s.cpu().detach().item(), 6)}")
 
                 # Log wandb
-                if num_steps % self.log_steps == 0:
+                if (num_steps//self.accumulation_steps) % self.log_steps == 0:
                     batch_loss = batch_loss/self.log_steps
                     
                     if is_main_process(self.subgroup):
@@ -473,34 +469,30 @@ class model_trainer():
                             "loss": batch_loss,
                             "lr": self.optim.param_groups[0]['lr'],
                         },
-                        step=num_steps)
+                        step=num_steps//self.accumulation_steps)
                     
                     batch_loss = 0
-
-                # Save the loss values
-                self.losses_comb = np.append(self.losses_comb, losses_comb_s.item())
-                self.steps_list = np.append(self.steps_list, num_steps)
 
                 # Reset the cumulative step loss
                 losses_comb_s *= 0
 
 
-            # Update EMA on CPU every `update_frequency` batches
-            if num_steps % self.ema_update_freq == 0:
-                with torch.no_grad():
-                    for ema_param, param in zip(self.ema_model_cpu.parameters(), self.model.module.parameters()):
-                        if param.requires_grad:
-                            ema_param.data.mul_(self.ema_decay).add_(param.cpu().data, alpha=(1.0 - self.ema_decay))
+                # Update EMA on CPU every `update_frequency` batches
+                if (num_steps//self.accumulation_steps)%self.ema_update_freq == 0:
+                    with torch.no_grad():
+                        for ema_param, param in zip(self.ema_model_cpu.parameters(), self.model.module.parameters()):
+                            if param.requires_grad:
+                                ema_param.data.mul_(self.ema_decay).add_(param.cpu().data, alpha=(1.0 - self.ema_decay))
 
 
-            # Save the model and graph every number of desired steps
-            if num_steps%self.numSaveSteps == 0 and is_main_process(self.subgroup):
-                self.model.module.wandb_id = self.wandb_id
-                self.model.wandb_id = self.wandb_id
-                self.model.module.saveModel(saveDir=self.saveDir, EMA_state_dict=self.ema_model_cpu.state_dict(), optimizer=self.optim, scheduler=self.scheduler, grad_scalar=self.grad_scaler, step=num_steps)
-                # self.graph_losses()
+                # Save the model and graph every number of desired steps
+                if (num_steps//self.accumulation_steps)%self.numSaveSteps == 0 and is_main_process(self.subgroup):
+                    self.model.module.wandb_id = self.wandb_id
+                    self.model.wandb_id = self.wandb_id
+                    self.model.module.saveModel(saveDir=self.saveDir, EMA_state_dict=self.ema_model_cpu.state_dict(), optimizer=self.optim, scheduler=self.scheduler, grad_scalar=self.grad_scaler, step=(num_steps//self.accumulation_steps))
+                    # self.graph_losses()
 
-                print("Saving model")
+                    print("Saving model")
         
         # if is_main_process():
         #     print(f"Loss at step #{num_steps}, update #{num_steps/self.numSteps}\n"+\

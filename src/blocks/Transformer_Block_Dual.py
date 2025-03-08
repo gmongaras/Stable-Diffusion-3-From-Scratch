@@ -12,19 +12,29 @@ from xformers.ops.swiglu_op import SwiGLU
 
 
 class Transformer_Block_Dual(nn.Module):
-    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", causal=False, positional_encoding="absolute", kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, layer_idx=None, last=False):
+    def __init__(self, dim, c_dim, hidden_scale=4.0, num_heads = 8, attn_type = "softmax", MLP_type = "gelu", causal=False, positional_encoding="absolute", kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, layer_idx=None, last=False):
         super().__init__()
 
         self.checkpoint_MLP = checkpoint_MLP
 
         # On the last block, we don't worry about the c stream
         self.last = last
+
+        # y input projection
+        self.y_proj = nn.Sequential(
+            nn.Linear(c_dim, c_dim),
+            nn.SiLU()
+        )
         
         # MLP and attention blocks
-        # self.MLP_x = MLP(dim, hidden_scale)
-        self.MLP_x = SwiGLU(dim, int(dim*hidden_scale), dim)
-        if not self.last:
-            self.MLP_c = SwiGLU(dim, int(dim*hidden_scale), dim)
+        if MLP_type == "swiglu_old":
+            self.MLP_x = SwiGLU(dim, int(dim*hidden_scale), dim)
+            if not self.last:
+                self.MLP_c = SwiGLU(dim, int(dim*hidden_scale), dim)
+        else:
+            self.MLP_x = MLP(dim, hidden_scale, act=MLP_type)
+            if not self.last:
+                self.MLP_c = MLP(dim, hidden_scale, act=MLP_type)
         self.attn = Attention(dim, num_heads=num_heads, attn_type=attn_type, causal=causal, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, layer_idx=layer_idx, dual=True, last=last)
         
         # Two layer norms
@@ -43,6 +53,8 @@ class Transformer_Block_Dual(nn.Module):
 
         
     def forward(self, X, c, y, orig_shape):
+        y = self.y_proj(y)
+
         # Attn layer
         X_, c_ = self.attn(self.norm1_x(X, y), self.norm1_c(c, y), orig_shape)
         X = (X_ * self.scale1_x(y)[:, None, :]) + X
