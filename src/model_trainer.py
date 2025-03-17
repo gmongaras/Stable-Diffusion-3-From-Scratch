@@ -145,7 +145,10 @@ class model_trainer():
             use_amp=True, 
             wandb_name=None, 
             log_steps=10,
-            loader_to_model_gpu=None):
+            loader_to_model_gpu=None,
+            bucket_indices_path=None,
+            data_parquet_folder=None,
+            max_res=256):
         # Saved info
         self.batchSize = batchSize
         self.accumulation_steps = accumulation_steps
@@ -163,6 +166,7 @@ class model_trainer():
         self.wandb_name = wandb_name
         self.log_steps = log_steps
         self.loader_to_model_gpu = loader_to_model_gpu
+        self.max_res = max_res
 
 
         # # The first GPUs are the data loader GPUs
@@ -240,9 +244,8 @@ class model_trainer():
         # Data loader GPUs
         if rank in self.loader_gpus:
             # Load in the VAE and T5 models onto the first device
-            self.VAE_T5_CLIP = VAE_T5_CLIP(batchSize, torch.device(f"cuda:{local_rank}"), loader_to_model_gpu=self.loader_to_model_gpu, rank=rank, world_size=world_size, num_batches=len(self.loader_to_model_gpu[rank]))
+            self.VAE_T5_CLIP = VAE_T5_CLIP(bucket_indices_path, data_parquet_folder, max_res, batchSize, torch.device(f"cuda:{local_rank}"), loader_to_model_gpu=self.loader_to_model_gpu, rank=rank, world_size=world_size, num_batches=len(self.loader_to_model_gpu[rank]))
         dist.barrier(group=self.subgroup)
-
 
         # Get the loader gpu that the model gpu is mapped to
         self.loader_gpu = self.model_to_loader_gpu[self.rank]

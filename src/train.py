@@ -10,7 +10,7 @@ from typing import List
 
 
 def train():
-    totalSteps = 150_000
+    totalSteps = 300_000
     # batchSize = 110
     batchSize = 70
     accumulation_steps = 2
@@ -45,6 +45,9 @@ def train():
     #wandb_name = "datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
     wandb_name = "datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
     log_steps = 10
+    bucket_indices_path = "data/bucket_indices_256.npy"
+    data_parquet_folder = "data/cc12m_and_imagenet21K_highqual_256"
+    max_res = 256
     # The original paper used 0.464 because 0.464*0.464*0.464 ~= 0.1 for three parts.
     # We want to mask about 10% of the time. Since there's only one pooled, that's just 0.1
     # and since there's two parts to the big embedding, that would be about 0.316
@@ -65,15 +68,15 @@ def train():
     #saveDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
     saveDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
 
-    loadModel = True
+    loadModel = False
     #loadDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
     loadDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
-    loadFile = "model_146000s.pkl"
-    load_ema_file = "model_ema_146000s.pkl"
-    loadDefFile = "model_params_146000s.json"
-    optimFile = "optim_146000s.pkl"
-    schedulerFile = "scheduler_146000s.pkl"
-    scalerFile = "scaler_146000s.pkl"
+    loadFile = "model_240000s.pkl"
+    load_ema_file = "model_ema_240000s.pkl"
+    loadDefFile = "model_params_240000s.json"
+    optimFile = "optim_240000s.pkl"
+    schedulerFile = "scheduler_240000s.pkl"
+    scalerFile = "scaler_240000s.pkl"
     
     
     
@@ -123,7 +126,10 @@ def train():
         wandb_name=wandb_name,
         log_steps=log_steps,
         device=device,
-        loader_to_model_gpu = loader_to_model_gpu
+        loader_to_model_gpu = loader_to_model_gpu,
+        bucket_indices_path = bucket_indices_path, 
+        data_parquet_folder = data_parquet_folder,
+        max_res=max_res,
     )
     trainer.train()
     

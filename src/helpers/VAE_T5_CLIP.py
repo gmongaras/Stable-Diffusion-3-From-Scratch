@@ -166,13 +166,14 @@ REPEATED_OPENINGS = [
 
 # Class for VAE + CLIP + T5
 class VAE_T5_CLIP:
-    def __init__(self, batch_size, offload_device, rank, world_size, loader_to_model_gpu, max_in_buffer=30, num_batches=2):
+    def __init__(self, bucket_indices_path, data_parquet_folder, max_res, batch_size, offload_device, rank, world_size, loader_to_model_gpu, max_in_buffer=30, num_batches=2):
         # Offloading all models to a single device
         self.device = offload_device
         self.loader_to_model_gpu = loader_to_model_gpu
         self.batchSize = batch_size
         self.max_in_buffer = max_in_buffer
         self.num_batches = num_batches
+        self.max_res = max_res
 
         # Get the rank of the current process
         self.rank = rank
@@ -303,7 +304,7 @@ class VAE_T5_CLIP:
         torch.cuda.empty_cache()
 
         # Load data forever
-        self.load_data()
+        self.load_data(bucket_indices_path, data_parquet_folder)
 
 
         # This should never be reached
@@ -324,7 +325,7 @@ class VAE_T5_CLIP:
     # This function will run forever and continually add data to the data buffer
     @torch.no_grad()
     @torch.inference_mode()
-    def load_data(self):
+    def load_data(self, bucket_indices_path, data_parquet_folder):
         # Create a sampler and loader over the dataset
         transforms = torchvision.transforms.Compose([
             # # Resize so the largest side is 256
@@ -355,9 +356,7 @@ class VAE_T5_CLIP:
         ###           pa_table = pa_table.drop(['__index_level_0__'])
         ### Which will remove the index column from the table if it exists
         # dataset = datasets.load_dataset("parquet", data_files=f"data/cc12m_and_imagenet21K/*.parquet", cache_dir="data/cache", split="train")
-        bucket_path = "data/bucket_indices_256.npy"
-        parquet_folder = "data/cc12m_and_imagenet21K_highqual_256"
-        dataset = datasets.load_dataset("parquet", data_files=f"{parquet_folder}/*.parquet", cache_dir="data/cache", split="train", num_proc=64)
+        dataset = datasets.load_dataset("parquet", data_files=f"{data_parquet_folder}/*.parquet", cache_dir="data/cache", split="train", num_proc=64)
         def transform_img(img):
             img = Image.open(io.BytesIO(img))
             img_ = transforms(img)
@@ -404,9 +403,9 @@ class VAE_T5_CLIP:
         #     collate_fn=collate_fn
         # )
         
-        dataset_utils.load_indices(bucket_path, dataset)
+        dataset_utils.load_indices(bucket_indices_path, dataset)
         hf_dataset = dataset_utils.HuggingFaceDataset(dataset)
-        sampler = dataset_utils.RandomBucketSampler(bucket_path, dataset, self.batchSize*self.num_batches)
+        sampler = dataset_utils.RandomBucketSampler(bucket_indices_path, dataset, self.batchSize*self.num_batches)
         data_loader = DataLoader(hf_dataset, 
             batch_sampler=sampler, 
             pin_memory=True,
@@ -417,7 +416,6 @@ class VAE_T5_CLIP:
             persistent_workers=True,
             collate_fn=collate_fn
         )
-
         """
         ctx = get_context("spawn")
 
@@ -466,7 +464,7 @@ class VAE_T5_CLIP:
             batch_x_0 = self.forward_VAE_and_sample(batch_x_0)
             # Pad latents to be of shape (256//8, 256//8). This is the max size so that
             # the GPU sync works properly.
-            batch_x_0 = F.pad(batch_x_0, (0, 256//8-batch_x_0.shape[-1], 0, 256//8-batch_x_0.shape[-2]), value=torch.inf)
+            batch_x_0 = F.pad(batch_x_0, (0, self.max_res//8-batch_x_0.shape[-1], 0, self.max_res//8-batch_x_0.shape[-2]), value=torch.inf)
 
             # Get pooled embedding from CLIP - (B, 768)
             text_pooled = self.CLIP_encode_text(batch_text)

@@ -55,6 +55,31 @@ def load_indices(path, dataset):
 
         print("Generating bucket indices...")
 
+
+        
+        """
+        from collections import defaultdict
+        from concurrent.futures import ThreadPoolExecutor
+        from tqdm import tqdm
+
+        bucket_dict = defaultdict(list)
+
+        # Function to process each sample
+        def process_sample(args):
+            idx, sample = args
+            return sample['bucket_size'], idx
+
+        # Threaded execution
+        with ThreadPoolExecutor() as executor:
+            results = list(tqdm(executor.map(process_sample, enumerate(dataset)), total=len(dataset)))
+
+        # Populate bucket_dict from threaded results
+        for bucket_size, idx in results:
+            bucket_dict[bucket_size].append(idx)
+        """
+
+
+
         # Group indices by bucket_size
         bucket_dict = defaultdict(list)
         for idx, sample in tqdm(enumerate(dataset), total=len(dataset)):
