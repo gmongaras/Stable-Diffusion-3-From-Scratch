@@ -8,6 +8,7 @@ from datasets import load_dataset
 import math
 from collections import defaultdict
 from multiprocessing import Pool, cpu_count
+import concurrent.futures
 
 
 
@@ -47,8 +48,15 @@ from multiprocessing import Pool, cpu_count
 
 #         print(f"Saved bucket indices to {path}")
 
+def process_part(dataset, indices):
+    bucket_dict_ = defaultdict(list)
+    dataset = dataset[indices]["bucket_size"]
+    for bucket_size, idx in zip(dataset, indices):
+        bucket_dict_[bucket_size].append(idx)
+    return bucket_dict_
 
-def load_indices(path, dataset):
+
+def load_indices(path, dataset, n_proc=32):
     # If precomputed indices are not available, generate them
     if not os.path.exists(path):
         from collections import defaultdict
@@ -79,11 +87,27 @@ def load_indices(path, dataset):
         """
 
 
-
-        # Group indices by bucket_size
+        # Group indices
         bucket_dict = defaultdict(list)
-        for idx, sample in tqdm(enumerate(dataset), total=len(dataset)):
-            bucket_dict[sample['bucket_size']].append(idx)
+        step = 10_000
+        indices = [range(i, min(i+step, len(dataset))) for i in range(0, len(dataset), step)]
+
+        # Multiproc
+        with concurrent.futures.ProcessPoolExecutor(max_workers=n_proc) as executor:
+            futures = {executor.submit(process_part, dataset, idxs): idxs for idxs in indices}
+            
+            # Accumulate outputs
+            for future in tqdm(concurrent.futures.as_completed(futures), total=len(indices)):
+                r = future.result()
+                for k,v in r.items():
+                    bucket_dict[k] += v
+
+
+
+        # # Group indices by bucket_size
+        # bucket_dict = defaultdict(list)
+        # for idx, sample in tqdm(enumerate(dataset), total=len(dataset)):
+        #     bucket_dict[sample['bucket_size']].append(idx)
 
         # # Save indices to JSON
         # with open(path, "w") as f:
@@ -113,10 +137,20 @@ class RandomBucketSampler(Sampler):
         total = sum(len(i[1]) for i in self.bucket_list)
         self.probs = np.array([len(i[1])/total for i in self.bucket_list])
 
+        # First few buckets will always be the largest to allocate proper GPU memory on first pass
+        self.first_n = 0
+        self.first_size = "x".join([str(i) for i in np.array([i[0].split("x") for i in self.bucket_list]).astype(int).max(0)])
+        self.first_idx = [i[0] for i in self.bucket_list].index(self.first_size)
+
     def __iter__(self):
         while True:
             # Get a random bucket based on the probability distribution
-            bucket_idx = np.random.choice(self.bucket_order, p=self.probs)
+            if self.first_n <= 0:
+                bucket_idx = np.random.choice(self.bucket_order, p=self.probs)
+            else:
+                bucket_idx = self.first_idx
+                self.first_n -= 1
+
 
             # Get a random batch from the selected bucket
             _, indices = self.bucket_list[bucket_idx]

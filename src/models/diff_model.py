@@ -81,18 +81,24 @@ class diff_model(nn.Module):
     # hidden_scale - Multiplier to scale in the MLP
     # num_heads - Number of heads in the attention blocks
     # attn_type - Type of attention to use in the transformer ("softmax" or "cosine")
+    # overwrite_RoPE_scale - Use this during training to change the saved RoPE scale 
     # num_blocks - Number of blocks in the transformer
     # device - Device to put the model on (gpu or cpu)
     # start_step - Step to start on. Doesn't do much besides 
     #               change the name of the saved output file
-    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, MLP_type, num_blocks, device, positional_encoding, kv_merge_attn=False, qk_half_dim=False, checkpoint_MLP=True, start_step=0, wandb_id=None):
+    def __init__(self, inCh, class_dim, patch_size, dim, hidden_scale, num_heads, attn_type, MLP_type, num_blocks, device, positional_encoding, max_res_orig=256, max_res=256, update_max_res=False, kv_merge_attn=False, qk_half_dim=False, text_loss=False, checkpoint_MLP=True, checkpoint_attn=True, start_step=0, wandb_id=None):
         super(diff_model, self).__init__()
+
+        self.update_max_res = update_max_res
+        self.max_res = max_res
+        self.RoPE_Scale = max_res_orig/max_res
         
         self.inCh = inCh
         self.class_dim = class_dim
         self.patch_size = patch_size
         self.start_step = start_step
         self.wandb_id = wandb_id
+        self.text_loss = text_loss
 
         # Positional encoding assert
         assert positional_encoding in ["absolute", "RoPE", "NoPE", "RoPE2d", "RoPE2dV2"], "positional_encoding must be 'absolute', 'RoPE', or 'NoPE' or 'RoPE2d' or 'RoPE2dV2'"
@@ -112,8 +118,11 @@ class diff_model(nn.Module):
             "MLP_type": MLP_type,
             "num_blocks": num_blocks,
             "positional_encoding": positional_encoding,
+            "max_res_orig": max_res_orig,
+            "max_res": max_res,
             "kv_merge_attn": kv_merge_attn,
             "qk_half_dim": qk_half_dim,
+            "text_loss": text_loss,
             "device": "cpu",
             "start_step": start_step,
             "wandb_id": wandb_id,
@@ -143,8 +152,9 @@ class diff_model(nn.Module):
             self.dev = "cpu" if device.type == "cpu" else "gpu"
         
         # Transformer blocks
+        # Note that we don't have a final text MLP block unless we are modeling loss on the text
         self.blocks = nn.ModuleList([
-            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, MLP_type=MLP_type, positional_encoding=positional_encoding, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, checkpoint_MLP=checkpoint_MLP, layer_idx=i, last=(i==num_blocks-1)).to(device)
+            Transformer_Block_Dual(dim, c_dim=dim, hidden_scale=hidden_scale, num_heads=num_heads, attn_type=attn_type, MLP_type=MLP_type, positional_encoding=positional_encoding, RoPE_Scale=self.RoPE_Scale, kv_merge_attn=kv_merge_attn, qk_half_dim=qk_half_dim, checkpoint_MLP=checkpoint_MLP, checkpoint_attn=checkpoint_attn, layer_idx=i, last=(i==num_blocks-1 and not self.text_loss)).to(device)
             for i in range(num_blocks)
         ])
             
@@ -208,6 +218,9 @@ class diff_model(nn.Module):
         # Used to scale the time value. Initialized to 1000 for high variance between timesteps.
         self.time_scale = nn.Parameter(torch.tensor([1000.0], dtype=torch.float, device=device), requires_grad=True).to(device)
 
+        # Output text projection if we are modeling text
+        if self.text_loss:
+            self.out_text_proj = nn.Linear(dim, self.text_hidden_shape).to(device)
         
     
         
@@ -334,6 +347,8 @@ class diff_model(nn.Module):
         # Unpatchify the images
         x_t = unpatchify(x_t, (self.patch_size, self.patch_size), orig_shape[-2:])
         
+        if self.text_loss:
+            return x_t, self.out_text_proj(c)
         return x_t
 
 
@@ -408,6 +423,8 @@ class diff_model(nn.Module):
 
             # Predict velocity twice for CFG
             velocity = self.forward(output.repeat(2, 1, 1, 1), t, text_hidden, text_pooled, nullCls, nullCls, nullCls)
+            if self.text_loss:
+                velocity = velocity[0]
             velocity = (1 + cfg_scale_dynamic) * velocity[:batchSize] - cfg_scale_dynamic * velocity[batchSize:]
 
             dt = 1 / num_steps  # Step size
@@ -550,6 +567,10 @@ class diff_model(nn.Module):
             D = self.defaults
             if "MLP_type" not in D:
                 D["MLP_type"] = "swiglu_old"
+            if "text_loss" not in D:
+                D["text_loss"] = False
+            if self.update_max_res:
+                D["max_res"] = self.max_res
 
             # Reinitialize the model with the new defaults
             self.__init__(**D)

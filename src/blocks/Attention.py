@@ -8,11 +8,12 @@ import src.blocks.rotary_embedding_2d_v2 as rotary_embedding_2d_v2
 
 
 class Attention(nn.Module):
-    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, emb_dim=None, positional_encoding="absolute", kv_merge_attn=False, qk_half_dim=False, layer_idx=None, dual=False, last=False):
+    def __init__(self, dim, num_heads = 8, attn_type = "cosine", causal=False, emb_dim=None, positional_encoding="absolute", RoPE_Scale=1, kv_merge_attn=False, qk_half_dim=False, layer_idx=None, dual=False, last=False):
         super().__init__()
 
         self.positional_encoding = positional_encoding
         self.kv_merge_attn = kv_merge_attn
+        self.RoPE_Scale = RoPE_Scale
 
         self.layer_idx = layer_idx
         # Dual blocks have two streams concatenated
@@ -84,10 +85,10 @@ class Attention(nn.Module):
 
         # Rotary embeddings
         if positional_encoding == "RoPE":
-            self.rotary_emb = RotaryEmbedding(self.head_dim_qk, use_xpos=False)
+            self.rotary_emb = RotaryEmbedding(self.head_dim_qk, use_xpos=False, interpolate_factor=1/RoPE_Scale)
         elif positional_encoding == "RoPE2d":
             # Divide by 2 since we are applying to two dimensions. One to one half, the other to the other half
-            self.rotary_emb = RotaryEmbedding(self.head_dim_qk//2, use_xpos=False)
+            self.rotary_emb = RotaryEmbedding(self.head_dim_qk//2, use_xpos=False, interpolate_factor=1/RoPE_Scale)
             # self.rotary_emb = rotary_embedding_2d.precompute_freqs_cis_2d(
             #     dim=self.head_dim_qk,
             #     height=1024//8,
@@ -96,7 +97,7 @@ class Attention(nn.Module):
             # )
         elif positional_encoding == "RoPE2dV2":
             # Divide by 2 since we are applying to two dimensions. One to one half, the other to the other half
-            self.rotary_emb = rotary_embedding_2d_v2.RoPE2D(self.head_dim_qk)
+            self.rotary_emb = rotary_embedding_2d_v2.RoPE2D(self.head_dim_qk, interpolate_factor=1/RoPE_Scale)
             # self.rotary_emb = rotary_embedding_2d.precompute_freqs_cis_2d(
             #     dim=self.head_dim_qk,
             #     height=1024//8,
@@ -152,7 +153,6 @@ class Attention(nn.Module):
             else:
                 queries = torch.nn.functional.normalize(queries, dim=-1, p=2)
                 keys = torch.nn.functional.normalize(keys, dim=-1, p=2)
-
 
         # Apply rotary embeddings only to the image
         if self.positional_encoding == "RoPE":

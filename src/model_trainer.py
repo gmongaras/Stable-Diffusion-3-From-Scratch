@@ -138,12 +138,16 @@ class model_trainer():
             null_prob_pooled=0.1, 
             null_prob_gemma=0.1, 
             null_prob_bert=0.1,
+            text_loss_weight=0.0,
             load_ema_file=None,
             optimFile=None, 
             schedulerFile=None, 
             scalerFile=None, 
             use_amp=True, 
             wandb_name=None, 
+            wandb_log_gradients=False,
+            reset_wandb=False,
+            reset_optim=False,
             log_steps=10,
             loader_to_model_gpu=None,
             bucket_indices_path=None,
@@ -164,9 +168,14 @@ class model_trainer():
         self.null_prob_bert = null_prob_bert
         self.use_amp = use_amp
         self.wandb_name = wandb_name
+        self.wandb_log_gradients = wandb_log_gradients
         self.log_steps = log_steps
         self.loader_to_model_gpu = loader_to_model_gpu
         self.max_res = max_res
+
+        assert text_loss_weight >= 0.0
+        self.text_loss = text_loss_weight > 0.0
+        self.text_loss_weight = text_loss_weight
 
 
         # # The first GPUs are the data loader GPUs
@@ -272,7 +281,7 @@ class model_trainer():
             self.ema_model_cpu.load_state_dict(torch.load(load_ema_file, map_location="cpu", weights_only=False))
 
         # Load in optimizer paramters if they exist
-        if optimFile:
+        if optimFile and not reset_optim:
             self.optim.load_state_dict(torch.load(optimFile, map_location=self.device, weights_only=False))
 
         # Load in scheduler paramters if they exist
@@ -285,6 +294,9 @@ class model_trainer():
 
         # Load in states from the pretrained diffusion model
         self.wandb_id = self.model.wandb_id if dev == "cpu" else self.model.module.wandb_id
+        if reset_wandb:
+            print("Resetting wandb_id for a new run")
+            self.wandb_id = None
         self.start_step = self.model.start_step if dev == "cpu" else self.model.module.start_step
         self.start_step = self.start_step * self.accumulation_steps
 
@@ -309,6 +321,9 @@ class model_trainer():
         losses_comb_s = torch.tensor(0.0, requires_grad=False)
 
         batch_loss = 0
+        if self.text_loss:
+            batch_text_loss = 0
+            batch_img_loss = 0
 
         # Initialize wandb run
         if is_main_process(self.subgroup):
@@ -321,7 +336,8 @@ class model_trainer():
                 resume="must" if self.wandb_id is not None else None,
                 id=self.wandb_id,
             )
-            wandb.watch(self.model, log_freq=self.log_steps)
+            if self.wandb_log_gradients:
+                wandb.watch(self.model, log_freq=self.log_steps)
             
             # Save wandb run id
             self.wandb_id = wandb.run.id
@@ -342,12 +358,12 @@ class model_trainer():
                 # data = self.VAE_T5_CLIP.load_data().to(self.device)
                 # NOTE: We want to place the tensors on the local gpu but send via the global gpu.
                 # dist.barrier(self.subgroup)
-                batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, 256//8, 256//8), dtype=torch.float16, device=self.device)
-                batch_txt = torch.empty((self.batchSize, 77*2, 2304), dtype=torch.float16, device=self.device)
-                batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.float16, device=self.device)
-                request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
+                batch_x_0 = torch.empty((self.batchSize, self.model.module.inCh, self.max_res//8, self.max_res//8), dtype=torch.bfloat16, device=self.device)
+                batch_txt = torch.empty((self.batchSize, 77*2, 2304), dtype=torch.bfloat16, device=self.device)
+                batch_txt_pooled = torch.empty((self.batchSize, self.model.module.class_dim), dtype=torch.bfloat16, device=self.device)
+                # request_flag = torch.tensor([1], dtype=torch.bool, device=f"cuda:{self.local_rank}") # Request signal
                 # Send request flag
-                dist.send(request_flag, dst=self.loader_gpu)
+                # dist.send(request_flag, dst=self.loader_gpu)
                 # Get the data
                 dist.recv(batch_x_0, src=self.loader_gpu)
                 dist.recv(batch_txt, src=self.loader_gpu)
@@ -358,7 +374,7 @@ class model_trainer():
                     batch_x_0.shape[2] - (batch_x_0[0,0] == torch.inf).sum(-2)[0].item(),
                     batch_x_0.shape[3] - (batch_x_0[0,0] == torch.inf).sum(-1)[0].item(),
                 )
-                # Apply mask to ge the unmasked latents
+                # Apply mask to get the unmasked latents
                 batch_x_0 = batch_x_0[batch_x_0 != torch.inf].reshape(orig_shape)
                 # dist.barrier(self.subgroup)
                 # Increate the number of steps taken
@@ -384,10 +400,33 @@ class model_trainer():
                     batch_x_t, epsilon_t = self.model.noise_batch(batch_x_0, t_vals)
                 else:
                     batch_x_t, epsilon_t = self.model.module.noise_batch(batch_x_0, t_vals)
+
+
+
+
+                # Text masking loss
+                if self.text_loss:
+                    # Labels
+                    batch_txt_labels = batch_txt.clone()
+                    # We want to mask some percentage of the text data
+                    percent_to_mask = 0.25
+                    # Probs for each token in the sequence
+                    probs = torch.rand(batch_txt.shape[0], batch_txt.shape[1], dtype=torch.float, device=batch_txt.device)
+                    # Binary mask (True for loss, False for no loss)
+                    txt_loss_mask = probs < percent_to_mask
+                    # We do not want to do any loss on masked text as it's
+                    # already masked
+                    txt_loss_mask[:, :77] = txt_loss_mask[:, :77] & nullCls_gemma[:, None]
+                    txt_loss_mask[:, 77:] = txt_loss_mask[:, 77:] & nullCls_bert[:, None]
+                    # Mask out the text
+                    batch_txt = batch_txt * ~txt_loss_mask[:, :, None]
             
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16) if self.use_amp else nullcontext():
                 # Send the noised data through the model to get the predicted noise
-                v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_gemma, nullCls_bert)
+                if self.text_loss:
+                    v_pred, txt_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_gemma, nullCls_bert)
+                else:
+                    v_pred = self.model(batch_x_t.detach(), t_vals,  batch_txt, batch_txt_pooled, nullCls_pooled, nullCls_gemma, nullCls_bert)
 
                 # The label is the velocity: 
                 # v_t = alpha_t' * x + sigma_t' * epsilon_t
@@ -414,6 +453,14 @@ class model_trainer():
                 else:
                     loss = loss.mean()
 
+
+                # Text loss
+                if self.text_loss:
+                    img_loss = loss.cpu().detach().item()
+                    # MSE loss with mask
+                    txt_loss = (nn.MSELoss(reduction="none")(txt_pred, batch_txt_labels) * txt_loss_mask[:, :, None]).mean()
+                    loss = loss + self.text_loss_weight*txt_loss
+
             # print(num_steps, loss)
 
             # Scale the loss to be consistent with the batch size. If the loss
@@ -432,6 +479,9 @@ class model_trainer():
             # Save the loss values
             losses_comb_s += loss.cpu().detach()
             batch_loss += loss.cpu().detach().item()
+            if self.text_loss:
+                batch_text_loss += txt_loss.cpu().detach().item()
+                batch_img_loss += img_loss
 
             # If the number of steps taken is a multiple of the number
             # of desired steps, update the models
@@ -468,13 +518,24 @@ class model_trainer():
                     batch_loss = batch_loss/self.log_steps
                     
                     if is_main_process(self.subgroup):
-                        wandb.log({
-                            "loss": batch_loss,
-                            "lr": self.optim.param_groups[0]['lr'],
-                        },
-                        step=num_steps//self.accumulation_steps)
+                        if self.text_loss:
+                            wandb.log({
+                                "loss": batch_loss,
+                                "text_loss": batch_text_loss,
+                                "image_loss": batch_img_loss,
+                                "lr": self.optim.param_groups[0]['lr'],
+                            },
+                            step=num_steps//self.accumulation_steps)
+                        else:
+                            wandb.log({
+                                "loss": batch_loss,
+                                "lr": self.optim.param_groups[0]['lr'],
+                            },
+                            step=num_steps//self.accumulation_steps)
                     
                     batch_loss = 0
+                    batch_text_loss = 0
+                    batch_img_loss = 0
 
                 # Reset the cumulative step loss
                 losses_comb_s *= 0

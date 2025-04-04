@@ -3,7 +3,7 @@ import torch.nn as nn
 
 
 class RoPE2D(nn.Module):
-    def __init__(self, dim):
+    def __init__(self, dim, interpolate_factor=1):
         super().__init__()
         self.dim = (dim // 3) * 3
         inv_freq = 1.0 / (10000 ** (torch.arange(0, self.dim, 3).float() / self.dim))
@@ -11,6 +11,7 @@ class RoPE2D(nn.Module):
             "inv_freq",
             inv_freq
         )
+        self.interpolate_factor = interpolate_factor
 
     def forward(self, x):
         len_ = (x.shape[-1] // 3) * 3
@@ -20,8 +21,8 @@ class RoPE2D(nn.Module):
             # x: (batch, heads, length, width, dim)
             length = x.shape[2]
             width = x.shape[3]
-            pos_len = torch.arange(length, device=x.device).float().unsqueeze(1)
-            pos_wid = torch.arange(width, device=x.device).float().unsqueeze(1)
+            pos_len = torch.arange(length, device=x.device).float().unsqueeze(1) / self.interpolate_factor
+            pos_wid = torch.arange(width, device=x.device).float().unsqueeze(1) / self.interpolate_factor
 
             # Thetas are rotated by the length. Alphas are rotated by the width.
             thetas = (pos_len * self.inv_freq)[None, None, :, None, :] # (1, length, 1, dim/3)

@@ -29,7 +29,7 @@ class VAE_T5_CLIP_inference:
         for param in self.VAE.parameters():
             param.requires_grad = False
         # Store locally to prevent issues with DDP
-        self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
+        self.VAE = self.VAE.eval().to(dtype=torch.bfloat16, device=self.device)
 
         # Passes image data through the VAE and then samples from the latent distribution
         @torch.no_grad()
@@ -47,7 +47,7 @@ class VAE_T5_CLIP_inference:
 
         # Load CLIP model (400M version) - https://huggingface.co/facebook/metaclip-l14-400m
         # Or larger version (2.5B) - https://huggingface.co/facebook/metaclip-h14-fullcc2.5b
-        self.CLIP_processor = CLIPProcessor.from_pretrained("facebook/metaclip-l14-400m", cache_dir="./models/CLIP", use_fast=True)
+        self.CLIP_processor = CLIPProcessor.from_pretrained("facebook/metaclip-l14-400m", cache_dir="./models/CLIP")
         self.CLIP_model = CLIPModel.from_pretrained(
             "facebook/metaclip-l14-400m", 
             cache_dir="./models/CLIP",

@@ -10,9 +10,9 @@ from typing import List
 
 
 def train():
-    totalSteps = 300_000
-    # batchSize = 110
-    batchSize = 70
+    totalSteps = 350_000
+    batchSize = 140 # Stage 1
+    # batchSize = 40 # Stage 2
     accumulation_steps = 2
     inCh = 16
     # num_loader_gpus = 2
@@ -43,11 +43,14 @@ def train():
     device = "gpu"
     # wandb_name = "attempt4_16GPU_RoPE_Cos_Clip_Fixmag_Merge"
     #wandb_name = "datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    wandb_name = "datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
+    wandb_name = "datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_140batchsize_stage1"
+    wandb_log_gradients = False # Turn this off to prevent wandb from hogging gpu memory (illegal memory accesses will occur when memory usage isn't maximum)
     log_steps = 10
     bucket_indices_path = "data/bucket_indices_256.npy"
     data_parquet_folder = "data/cc12m_and_imagenet21K_highqual_256"
-    max_res = 256
+    max_res = 256 # Max res in pixel space, not latent space
+    max_res_orig = 256
+    downsample_factor = 16 # Downsample factor ((downsample scale for VAE) * (patch size))
     # The original paper used 0.464 because 0.464*0.464*0.464 ~= 0.1 for three parts.
     # We want to mask about 10% of the time. Since there's only one pooled, that's just 0.1
     # and since there's two parts to the big embedding, that would be about 0.316
@@ -60,23 +63,27 @@ def train():
     ema_decay = 0.99
     warmup_steps = 1000
     checkpoint_MLP = True
-    positional_encoding = "RoPE2dV2" # "absolute" or "RoPE" or "NoPE" or "RoPE2d" or "RoPE2dV2"
+    checkpoint_attn = True
+    positional_encoding = "RoPE2d" # "absolute" or "RoPE" or "NoPE" or "RoPE2d" or "RoPE2dV2"
     kv_merge_attn = False
     qk_half_dim = False
+    text_loss_weight = 0.0 # Zero for no text loss
+    reset_wandb = False
+    reset_optim = False
 
     numSaveSteps = 1000
     #saveDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    saveDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
+    saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_140batchsize_stage1"
 
-    loadModel = False
+    loadModel = True
     #loadDir = "models/datav3_attempt2_8GPU_Cos_RoPE1d_resize256"
-    loadDir = "models/datav3_attempt4_8GPU_SoftFlash_RoPE2dV2_2AccSteps"
-    loadFile = "model_240000s.pkl"
-    load_ema_file = "model_ema_240000s.pkl"
-    loadDefFile = "model_params_240000s.json"
-    optimFile = "optim_240000s.pkl"
-    schedulerFile = "scheduler_240000s.pkl"
-    scalerFile = "scaler_240000s.pkl"
+    loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_140batchsize_stage1"
+    loadFile = "model_155000s.pkl"
+    load_ema_file = "model_ema_155000s.pkl"
+    loadDefFile = "model_params_155000s.json"
+    optimFile = "optim_155000s.pkl"
+    schedulerFile = "scheduler_155000s.pkl"
+    scalerFile = "scaler_155000s.pkl"
     
     
     
@@ -92,9 +99,14 @@ def train():
         MLP_type=MLP_type,
         num_blocks=num_blocks,
         checkpoint_MLP=checkpoint_MLP,
+        checkpoint_attn=checkpoint_attn,
         positional_encoding=positional_encoding,
+        max_res_orig=max_res_orig,
+        max_res=max_res,
+        update_max_res=True,
         kv_merge_attn=kv_merge_attn,
         qk_half_dim=qk_half_dim,
+        text_loss=(text_loss_weight > 0.0),
         device=device,
     )
     
@@ -118,12 +130,16 @@ def train():
         null_prob_pooled=null_prob_pooled,
         null_prob_gemma=null_prob_gemma,
         null_prob_bert=null_prob_bert,
+        text_loss_weight=text_loss_weight,
         load_ema_file=None if loadModel==False or load_ema_file==None else loadDir+os.sep+load_ema_file,
         optimFile=None if loadModel==False or optimFile==None else loadDir+os.sep+optimFile,
         schedulerFile=None if loadModel==False or schedulerFile==None else loadDir+os.sep+schedulerFile,
         scalerFile=None if loadModel==False or scalerFile==None else loadDir+os.sep+scalerFile,
         use_amp=True,
         wandb_name=wandb_name,
+        wandb_log_gradients=wandb_log_gradients,
+        reset_wandb=reset_wandb,
+        reset_optim=reset_optim,
         log_steps=log_steps,
         device=device,
         loader_to_model_gpu = loader_to_model_gpu,

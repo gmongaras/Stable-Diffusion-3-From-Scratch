@@ -44,12 +44,12 @@ class Data:
     text = None
     text_pooled = None
 
-    def __init__(self, images, text, text_pooled, dtype=torch.float16, device=torch.device("cpu")):
+    def __init__(self, images, text, text_pooled, dtype=torch.bfloat16, device=torch.device("cpu")):
         self.images = images.to(dtype=dtype, device=device)
         self.text = text.to(dtype=dtype, device=device)
         self.text_pooled = text_pooled.to(dtype=dtype, device=device)
 
-    def to(self, dtype=torch.float16, device=torch.device("cpu")):
+    def to(self, dtype=torch.bfloat16, device=torch.device("cpu")):
         self.images = self.images.to(dtype=dtype, device=device)
         self.text = self.text.to(dtype=dtype, device=device)
         self.text_pooled = self.text_pooled.to(dtype=dtype, device=device)
@@ -72,6 +72,16 @@ def resize_nearest_multiple(x, v):
 
 
 def wait_gpu_n(n, device, parent_conn):
+    # Get data from parent data loader
+    next_data = parent_conn.recv()
+
+    # Send data to model GPU
+    dist.send(next_data["images"], dst=n)
+    dist.send(next_data["text"], dst=n)
+    dist.send(next_data["text_pooled"], dst=n)
+
+    return
+
     # Wait for a request flag from GPU
     request_flag = torch.tensor([0], dtype=torch.bool, device=device)
     dist.irecv(request_flag, src=n).wait()
@@ -92,7 +102,7 @@ def wait_gpu_n(n, device, parent_conn):
         #     total_seconds += 0.1
         #     if total_seconds == 60: # Should never take a whole minute
         #         raise(f"Issue on gpu {n} when waiting for data from parent")
-        next_data = parent_conn.recv()
+        # next_data = parent_conn.recv()
 
         # Send data to GPU
         dist.send(next_data["images"], dst=n)
@@ -200,7 +210,7 @@ class VAE_T5_CLIP:
         for param in self.VAE.parameters():
             param.requires_grad = False
         # Store locally to prevent issues with DDP
-        self.VAE = self.VAE.eval().to(dtype=torch.float16, device=self.device)
+        self.VAE = self.VAE.eval().to(dtype=torch.bfloat16, device=self.device)
         # self.VAE = torch.compile(self.VAE, mode="reduce-overhead")
         # Passes image data through the VAE and then samples from the latent distribution
         # @torch.no_grad()
@@ -218,7 +228,7 @@ class VAE_T5_CLIP:
 
         # Load CLIP model (400M version) - https://huggingface.co/facebook/metaclip-l14-400m
         # Or larger version (2.5B) - https://huggingface.co/facebook/metaclip-h14-fullcc2.5b
-        self.CLIP_processor = CLIPProcessor.from_pretrained("facebook/metaclip-l14-400m", cache_dir="./models/CLIP", use_fast=True)
+        self.CLIP_processor = CLIPProcessor.from_pretrained("facebook/metaclip-l14-400m", cache_dir="./models/CLIP")
         self.CLIP_model = CLIPModel.from_pretrained(
             "facebook/metaclip-l14-400m", 
             cache_dir="./models/CLIP",
@@ -377,15 +387,17 @@ class VAE_T5_CLIP:
             except:
                 return ""
         def collate_fn(batch):
+            # 50% chance for normal caption and 50% chance for short caption
+            cap_type = "recaption" if random.random() < 0.5 else "recaption_short"
             return torch.stack([transform_img(b["image"]) for b in batch]), \
-                [b["recaption_short"].strip() for b in batch]
+                [b[cap_type].strip() for b in batch]
             batch = [transform_img(b["image"]) for b in batch], \
                 [b["recaption_short"].strip() for b in batch]
             # Get the largest image height and largest image width in the batch
             max_h = max([b.shape[1] for b in batch[0]])
             max_w = max([b.shape[2] for b in batch[0]])
             # Pad all images to the largest image height and largest image width in the batch and get a padding mask
-            padded = torch.zeros((len(batch[0]), 3, max_h, max_w), dtype=torch.float16)
+            padded = torch.zeros((len(batch[0]), 3, max_h, max_w), dtype=torch.bfloat16)
             padding_mask = torch.zeros((len(batch[0]), max_h, max_w), dtype=torch.bool)
             for i, b in enumerate(batch[0]):
                 padded[i, :, :b.shape[1], :b.shape[2]] = b
@@ -442,8 +454,8 @@ class VAE_T5_CLIP:
         for data in data_loader:
             batch_x_0, batch_text = data
             # batch_x_0_, batch_x_0, batch_text, padding_mask, padding_mask_downsampled = data
-            batch_x_0 = batch_x_0.to(dtype=torch.float16, device=self.device)
-            # batch_x_0_ = batch_x_0_.to(dtype=torch.float16, device=self.device)
+            batch_x_0 = batch_x_0.to(dtype=torch.bfloat16, device=self.device)
+            # batch_x_0_ = batch_x_0_.to(dtype=torch.bfloat16, device=self.device)
 
             # Encode text using Gemma - (B, 77, 2304)
             text_hidden_Gemma = self.Gemma_encode_text(batch_text)
@@ -477,7 +489,33 @@ class VAE_T5_CLIP:
             text = text_hidden.split(self.batchSize)
             text_pooled = text_pooled.split(self.batchSize)
             # Send data directly to each process
+            # for i, n in enumerate(self.gpus):
+            #     request_flag = torch.tensor([0], dtype=torch.bool, device=self.device)
+            #     dist.irecv(request_flag, src=n).wait()
+
+            #     if request_flag.item() == 1:  # If GPU requested data
+            #         # print(f"Send process: Received request signal from GPU {n}.")
+            #         # while data_queue.empty():
+            #         #     time.sleep(0.01)
+            #         # if not data_queue.empty():
+            #         # Get data from the queue
+            #         # next_data = data_queue.get()
+
+            #         # # If the model requests data faster than the dataloader is preparing it,
+            #         # # this can run into a race condition.
+            #         # total_seconds = 0
+            #         # while not parent_conn.poll():
+            #         #     time.sleep(0.1)  # Small delay to prevent busy waiting
+            #         #     total_seconds += 0.1
+            #         #     if total_seconds == 60: # Should never take a whole minute
+            #         #         raise(f"Issue on gpu {n} when waiting for data from parent")
+            #         # next_data = parent_conn.recv()
+
+            #         # Send data to GPU
+            #         dist.send(batch_x_0[i], dst=n)
+            #         dist.send(text[i], dst=n)
+            #         dist.send(text_pooled[i], dst=n)
             for i, pipe in enumerate(pipes):
-                pipe.send({"images": batch_x_0[i].half(), "text": text[i].half(), "text_pooled": text_pooled[i].half()})
+                pipe.send({"images": batch_x_0[i].to(torch.bfloat16), "text": text[i].to(torch.bfloat16), "text_pooled": text_pooled[i].to(torch.bfloat16)})
 
 
