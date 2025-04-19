@@ -1,7 +1,5 @@
 import torch
-from torch.utils.data import Dataset, DataLoader
-import torchvision
-from transformers import T5Tokenizer
+from torch.utils.data import Dataset
 
 class ImageTextDataset(Dataset):
     def __init__(self, image_dataset, text_encoder, tokenizer, device, dummy_text="A default caption", transform=None):

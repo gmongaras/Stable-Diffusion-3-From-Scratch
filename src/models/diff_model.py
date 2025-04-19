@@ -7,21 +7,15 @@ sys.path.append("./")
 import numpy as np
 import torch
 from torch import nn
-try:
-    from src.blocks.PositionalEncoding import PositionalEncoding
-    from src.blocks.Transformer_Block_Dual import Transformer_Block_Dual
-    from src.blocks.Transformer_Block_Single import Transformer_Block_Single
-    from src.blocks.patchify import patchify, unpatchify
-    from src.blocks.Norm import Norm
-    from src.blocks.ImagePositionalEncoding import PatchEmbed, PatchEmbedAttn
-    from src.blocks.TextPositionalEncoding import TextPositionalEncoding
-    from src.helpers.VAE_T5_CLIP_inference import VAE_T5_CLIP_inference
-except ModuleNotFoundError:
-    from ..blocks.PositionalEncoding import PositionalEncoding
+from src.blocks.PositionalEncoding import PositionalEncoding
+from src.blocks.Transformer_Block_Dual import Transformer_Block_Dual
+from src.blocks.patchify import patchify, unpatchify
+from src.blocks.Norm import Norm
+from src.blocks.ImagePositionalEncoding import PatchEmbed
+from src.helpers.VAE_T5_CLIP_inference import VAE_T5_CLIP_inference
 import os
 import json
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 
 

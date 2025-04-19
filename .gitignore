@@ -39,7 +39,12 @@ data/laion/img2dataset.pex
 data/Stable_Diffusion_3_Recaption
 data/cc12m.tsv
 src/models/
+tmp/
+data/bucket_indices_256.npy
+data/bucket_indices_512.npy
+SD3Venv/
 
+!runjob_SLURM.sh
 !.gitignore
 !models/README.md
 !results/*.gif

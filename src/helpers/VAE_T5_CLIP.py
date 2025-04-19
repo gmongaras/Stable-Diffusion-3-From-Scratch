@@ -1,26 +1,17 @@
 import torchvision.transforms.functional
-from transformers import CLIPProcessor, CLIPModel, AutoProcessor, BitsAndBytesConfig, ModernBertModel
+from transformers import CLIPProcessor, CLIPModel, ModernBertModel
 from transformers.models.gemma2.modeling_gemma2 import Gemma2Model
 from transformers.models.gemma.tokenization_gemma_fast import GemmaTokenizerFast
-import torch_tensorrt
-import open_clip
 import torch
 import torch.nn.functional as F
 from diffusers import AutoencoderKL
-# from src.Autoencoder.autoencoder_kl import AutoencoderKL
-import threading
 import torchvision
 from torch.utils.data import DataLoader
 import torch.distributed as dist
-import numpy as np
-import time
 import torch.multiprocessing as mp
-from torch.multiprocessing import get_context
-import pickle
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoTokenizer
 import datasets
 import io
-import PIL
 from PIL import Image
 from PIL import PngImagePlugin
 import os
@@ -71,7 +62,7 @@ def resize_nearest_multiple(x, v):
 
 
 
-def wait_gpu_n(n, device, parent_conn):
+def wait_gpu_n(n, parent_conn):
     # Get data from parent data loader
     next_data = parent_conn.recv()
 
@@ -79,39 +70,6 @@ def wait_gpu_n(n, device, parent_conn):
     dist.send(next_data["images"], dst=n)
     dist.send(next_data["text"], dst=n)
     dist.send(next_data["text_pooled"], dst=n)
-
-    return
-
-    # Wait for a request flag from GPU
-    request_flag = torch.tensor([0], dtype=torch.bool, device=device)
-    dist.irecv(request_flag, src=n).wait()
-
-    if request_flag.item() == 1:  # If GPU requested data
-        # print(f"Send process: Received request signal from GPU {n}.")
-        # while data_queue.empty():
-        #     time.sleep(0.01)
-        # if not data_queue.empty():
-        # Get data from the queue
-        # next_data = data_queue.get()
-
-        # # If the model requests data faster than the dataloader is preparing it,
-        # # this can run into a race condition.
-        # total_seconds = 0
-        # while not parent_conn.poll():
-        #     time.sleep(0.1)  # Small delay to prevent busy waiting
-        #     total_seconds += 0.1
-        #     if total_seconds == 60: # Should never take a whole minute
-        #         raise(f"Issue on gpu {n} when waiting for data from parent")
-        # next_data = parent_conn.recv()
-
-        # Send data to GPU
-        dist.send(next_data["images"], dst=n)
-        dist.send(next_data["text"], dst=n)
-        dist.send(next_data["text_pooled"], dst=n)
-        # print(f"Send process: Sent data to GPU {n}.")
-        # else:
-        #     print("Send process: No data in queue to send.")
-
 
 
 # This function will run forever and continually send data to the other GPUs
@@ -123,7 +81,7 @@ def send_data_process(parent_conn, device, rank, world_size, gpu_num):
     torch.cuda.set_device(device)
     while True:
         # Wait for GPU
-        wait_gpu_n(gpu_num, device, parent_conn)
+        wait_gpu_n(gpu_num, parent_conn)
         
 
 

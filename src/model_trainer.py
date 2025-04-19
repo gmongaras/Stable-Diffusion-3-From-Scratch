@@ -1,21 +1,13 @@
 import torch
 from torch import nn
-import torchvision
 import numpy as np
-import matplotlib.pyplot as plt
 import os
 import wandb
 from tqdm import tqdm
 import copy
-import time
 
-import torch.multiprocessing as mp
-from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 import torch.distributed as dist
-
-from torch.utils.data.distributed import DistributedSampler
-from torch.utils.data.dataloader import DataLoader
 
 from helpers.multi_gpu_helpers import is_main_process
 from helpers.TimeSampler import TimeSampler
