@@ -41,7 +41,7 @@ multidict==6.4.3
 multiprocess==0.70.15
 nest-asyncio==1.6.0
 networkx==3.3
-numpy==2.2.4
+numpy==1.26.4
 open-clip-torch==2.20.0
 packaging==25.0
 pandas==2.2.3
