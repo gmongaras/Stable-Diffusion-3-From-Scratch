@@ -3,13 +3,37 @@
 I wanted to try to train Stable Diffusion 3 from scratch, but with 8 GPUs. Did I? That's probably up to debate. However an attempt was made. The images look mid as I only have 8 GPUs and finite time but the scripts could be useful to others perhaps.
 
 # Contents
+- [Sample Images](#sample-images)
 - [Setup](#setup)
 - [Downloading Pretrained Models](#downloading-pretrained-models)
 - [Inference](#inference)
-- [Training](#Training)
+- [Training](#training)
 - [Model Details](#model-details)
 - [Recpationing and Other Scripts](#recpationing-and-other-scripts)
 
+
+
+
+
+
+
+
+# Sample Images
+
+While the model is training, I prompt it to see if it's actually working. Here are a few at 512 resolution.
+
+![A beautiful mountain landscape](selected_images/A%20beautiful%20mountain%20landscape.png)
+![A crab on the beach with sunglasses](selected_images/A%20crab%20on%20the%20beach%20with%20sunglasses.png)
+![A crab on the beach with sunglasses2](selected_images/A%20crab%20on%20the%20beach%20with%20sunglasses2.png)
+![A goldfish with a purple face and orange body swims over a bed of rocks in an aquarium](selected_images/A%20goldfish%20with%20a%20purple%20face%20and%20orange%20body%20swims%20over%20a%20bed%20of%20rocks%20in%20an%20aquarium.png)
+![A goldfish with a white face and orange body swims over a bed of rocks in an aquarium](selected_images/A%20goldfish%20with%20a%20white%20face%20and%20orange%20body%20swims%20over%20a%20bed%20of%20rocks%20in%20an%20aquarium.png)
+![A small bird with a red breast perches on a rock in a cold environment by the water](selected_images/A%20small%20bird%20with%20a%20red%20breast%20perches%20on%20a%20rock%20in%20a%20cold%20environment%20by%20the%20water.png)
+![Three cyclists, one in the lead, speed down a dirt track marked with red and white tape, surrounded by spectators and a wooded background with trees and greenery](selected_images/Three%20cyclists%2C%20one%20in%20the%20lead%2C%20speed%20down%20a%20dirt%20track%20marked%20with%20red%20and%20white%20tape%2C%20surrounded%20by%20spectators%20and%20a%20wooded%20background%20with%20trees%20and%20greenery.png)
+![a mushroom taking a selfie in front of a beautiful snowy mountain landscape with](selected_images/a%20mushroom%20taking%20a%20selfie%20in%20front%20of%20a%20beautiful%20snowy%20mountain%20landscape%20with.png)
+![a mushroom with sunglasses taking a selfie in front of a beautiful snowy mountain landscape](selected_images/a%20mushroom%20with%20sunglasses%20taking%20a%20selfie%20in%20front%20of%20a%20beautiful%20snowy%20mountain%20landscape.png)
+![anime neko girl with cat ears, cinematic, amazing background, magic.png](selected_images/anime%20neko%20girl%20with%20cat%20ears,%20cinematic,%20amazing%20background,%20magic.png)
+![cat taking a selfie in front of a beautiful snowy mountain landscape with](selected_images/cat%20taking%20a%20selfie%20in%20front%20of%20a%20beautiful%20snowy%20mountain%20landscape%20with.png)
+![realistic cat playing with a ball of yarn](selected_images/realistic%20cat%20playing%20with%20a%20ball%20of%20yarn.png)
 
 
 
