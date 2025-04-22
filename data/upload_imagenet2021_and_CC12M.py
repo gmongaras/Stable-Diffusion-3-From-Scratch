@@ -4,8 +4,8 @@ import datasets
 from datasets import load_dataset
 
 # Replace 'path/to/folder' with the path to your folder containing the Parquet files
-parquet_folder = "data/cc12m_and_imagenet21K_highqual"
-dataset_name = "gmongaras/CC12M_and_Imagenet21K_Recap_Highqual"
+parquet_folder = "data/cc12m_and_imagenet21K_highqual_512"
+dataset_name = "gmongaras/CC12M_and_Imagenet21K_Recap_Highqual_512"
 
 # Load the dataset from the folder of Parquet files
 dataset = load_dataset("parquet", data_files=f"{parquet_folder}/*.parquet", cache_dir="data/cache", split="train", num_proc=64)
@@ -27,8 +27,8 @@ with open(".env", "r") as f:
 
 #"""
 # Iterate over all shards
-num_shards_start = 7020 # Number uploaded plus 1
-num_shards = 8477 # Get this by running the function below
+num_shards_start = 1770 # Number uploaded plus 1
+num_shards = 7000 # Get this by running the function below
 num_shards_per_push = 15 # You want this relatively high so you don't run into rate limits but not too high so it can't push the shards as it will timeout
 
 num_shards = (num_shards // num_shards_per_push) + 1

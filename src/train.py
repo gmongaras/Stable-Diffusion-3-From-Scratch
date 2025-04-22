@@ -7,7 +7,7 @@ import os
 
 
 def train():
-    totalSteps = 500_000
+    totalSteps = 600_000
     # batchSize = 140 # Stage 1
     batchSize = 40 # Stage 2
     accumulation_steps = 2
@@ -67,16 +67,16 @@ def train():
     reset_optim = False
 
     numSaveSteps = 1000
-    saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_140batchsize_stage2"
+    saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
 
     loadModel = True
-    loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_140batchsize_stage2"
-    loadFile = "model_439000s.pkl"
-    load_ema_file = "model_ema_439000s.pkl"
-    loadDefFile = "model_params_439000s.json"
-    optimFile = "optim_439000s.pkl"
-    schedulerFile = "scheduler_439000s.pkl"
-    scalerFile = "scaler_439000s.pkl"
+    loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
+    loadFile = "model_534000s.pkl"
+    load_ema_file = "model_ema_534000s.pkl"
+    loadDefFile = "model_params_534000s.json"
+    optimFile = "optim_534000s.pkl"
+    schedulerFile = "scheduler_534000s.pkl"
+    scalerFile = "scaler_534000s.pkl"
     
     
     

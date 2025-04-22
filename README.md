@@ -145,6 +145,10 @@ Before training, you need to bucket you data. The base dataset is located at [ht
 
 `data/create_phase.py` takes the input directory above `input_dir`, a `max_resolution`, a `patch_size`, and and output directory. All images are resized to the nearest factor of `patch_size`, retaining their aspect ratio. A new dataset with bucket classes and the resized images is created.
 
+Alternatively, you can download the buckets I have created.
+- [256 bucket](https://huggingface.co/datasets/gmongaras/CC12M_and_Imagenet21K_Recap_Highqual_256)
+- [512 bucket](https://huggingface.co/datasets/gmongaras/CC12M_and_Imagenet21K_Recap_Highqual_512)
+
 
 
 ## Creating Indices
