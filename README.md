@@ -34,6 +34,11 @@ While the model is training, I prompt it to see if it's actually working. Here a
 ![anime neko girl with cat ears, cinematic, amazing background, magic.png](selected_images/anime%20neko%20girl%20with%20cat%20ears,%20cinematic,%20amazing%20background,%20magic.png)
 ![cat taking a selfie in front of a beautiful snowy mountain landscape with](selected_images/cat%20taking%20a%20selfie%20in%20front%20of%20a%20beautiful%20snowy%20mountain%20landscape%20with.png)
 ![realistic cat playing with a ball of yarn](selected_images/realistic%20cat%20playing%20with%20a%20ball%20of%20yarn.png)
+![An old rusted robot wearing pants and a jacket riding skis in a supermarket](selected_images/An%20old%20rusted%20robot%20wearing%20pants%20and%20a%20jacket%20riding%20skis%20in%20a%20supermarket.png)
+![an image of a fox in the snow](selected_images/an%20image%20of%20a%20fox%20in%20the%20snow.png)
+![cat taking a selfie in front of a beautiful snowy mountain landscape](selected_images/cat%20taking%20a%20selfie%20in%20front%20of%20a%20beautiful%20snowy%20mountain%20landscape.png)
+![i forgot the prompt its on SD3 paper](selected_images/i%20forgot%20the%20prompt%20its%20on%20SD3%20paper.png)
+![wtf is this thing](selected_images/wtf%20is%20this%20thing.png)
 
 
 
