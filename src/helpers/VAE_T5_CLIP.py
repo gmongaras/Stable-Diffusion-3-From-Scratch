@@ -425,6 +425,7 @@ class VAE_T5_CLIP:
 
             # Concatenate the two embeddings along the sequence dimension - (B, 77*2, 2304)
             text_hidden = torch.cat([text_hidden_Gemma, text_hidden_ModernBert], dim=1)
+            del text_hidden_Gemma, text_hidden_ModernBert
 
             # Encode batch using VAE - downsample by a factor of 8
             # Get sample from latent distribution using the reparameterization trick
@@ -444,7 +445,7 @@ class VAE_T5_CLIP:
 
             # Add to the buffer
             batch_x_0 = batch_x_0.split(self.batchSize)
-            text = text_hidden.split(self.batchSize)
+            text_hidden = text_hidden.split(self.batchSize)
             text_pooled = text_pooled.split(self.batchSize)
             # Send data directly to each process
             # for i, n in enumerate(self.gpus):
@@ -474,6 +475,6 @@ class VAE_T5_CLIP:
             #         dist.send(text[i], dst=n)
             #         dist.send(text_pooled[i], dst=n)
             for i, pipe in enumerate(pipes):
-                pipe.send({"images": batch_x_0[i].to(torch.bfloat16), "text": text[i].to(torch.bfloat16), "text_pooled": text_pooled[i].to(torch.bfloat16)})
+                pipe.send({"images": batch_x_0[i].to(torch.bfloat16), "text": text_hidden[i].to(torch.bfloat16), "text_pooled": text_pooled[i].to(torch.bfloat16)})
 
 

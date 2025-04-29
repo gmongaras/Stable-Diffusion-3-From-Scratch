@@ -90,6 +90,10 @@ Most specific versions probably don't matter except for the transformers version
 
 # Downloading Pretrained Models
 
+I pretrained two models, one with some positional encodings I was testing out and the other with normal RoPE 2d. I think the positional encodings I was trying out may have actually worked, but since I pretty much only had time left for one run, I restarted it and switched to RoPE 2d just to be safe.
+
+The model I trained is about 1.2 billion params. It currently produces images up to 512 resolution, though I may try for a larger resolution.
+
 A list of checkpoints can be found at [https://huggingface.co/collections/gmongaras/stable-diffusion-3-checkpoints-67f91e538138a2960a81eeb7](https://huggingface.co/collections/gmongaras/stable-diffusion-3-checkpoints-67f91e538138a2960a81eeb7)
 
 Currently the best model I have trained is located in [this repo](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2). The highest version is likely the best model I have trained, but I'll leave a note if that's not the case. Currently, the best model is checkpoint 475,000. Note liks will mention this version though there is likely a better version of the model which you might want to download instead. For inference with checkpoint 475,000, you want to download [this pickle](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/model_ema_475000s.pkl) and [this json](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/model_params_475000s.json) and put it somewhere you can reference in the inference script. If you want to finetune this model, you probably want [the optimizer states](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/optim_475000s.pkl), [the fast moving model](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/model_475000s.pkl), [the scalar state](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/scaler_475000s.pkl), and [the scheduler state](https://huggingface.co/gmongaras/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2/blob/main/scheduler_475000s.pkl). This checkpoint is about 1.2B params and was finetuned on resolution 512x512 after taining for a resolution of 256x256 for 300,000 steps. This means the max resolution is 512x512. I also trained on almost all multiples of 16. So any multiple of 16 such as 256x128 should work, allowing for different aspect ratio outputs.
@@ -155,11 +159,11 @@ The training script is lcoated in `src/train.py`. While you could go and just ru
 
 Unlike an LLM, diffusion models have a lot of overhead preprocessing the data. While the original stable diffusion 3 paper took the entire dataset and preprocessed all the data by tokenizing the text and processing the images through the VAE, I wanted to experiment with the data. The nice part about the SD3 approach is it is fast to load in and makes everything easy. The downside is it takes forever to tokenize all your data and you cannot change the data once it's processed (unless you reprocess all you data).
 
-Instead, I decided to use some GPUs to do forward/backward passes on the model and have other GPUs preprocess and load in new data. For every X "model GPUs" that do a forward/backward pass, a single "data loader" GPU can load data for all X GPUs. In my case I had X=3 model GPUs. Idealy the time to processes the data should be equal to a single forward/backward pass, thus having very little overhead between forward passes.
+Instead, I decided to use some GPUs to do forward/backward passes on the model and have other GPUs preprocess and load in new data. For every X "model GPUs" that do a forward/backward pass, a single "data loader" GPU can load data for all X GPUs. In my case I had X=3 model GPUs. As I had 8 gpus, this means there were 6 GPUs working with the model and 2 GPUs feeding data where each of the two data GPUs were assigned 3 model GPUs. Idealy the time to processes the data should be equal to a single forward/backward pass, thus having very little overhead between forward passes.
 
 The current configuration works well for 8 A100 GPUs. It should support more nodes, but I haven't tested it too well.
 
-If you are planning to train from scratch, I would
+If you are planning to train from scratch, I would configure this to your own system. See how fast you can get it.
 
 
 
@@ -205,7 +209,7 @@ The train script has the following parameters:
 - MLP_type - Either use a SwiGLU MLP or GeLU MLP (`gelu` or `swiglu`). Note that SwiGLU adds another linear layer over gelu.
 - device - Just keep this `gpu`
 - wandb_name - Name of the wandb project for training curves
-- wandb_log_gradients - Flag to turn off/on wandb gradient logging. I found that this increases memory usage and turned it off. Could be helpful for debugging though
+- wandb_log_gradients - Flag to turn off/on wandb gradient logging. I found that this increases memory usage and turned it off. Could be helpful for debugging though. Even if you have it on, the gradients are just wrong with AMP turned on [https://github.com/wandb/wandb/issues/9092](https://github.com/wandb/wandb/issues/9092)
 - log_steps - Number of steps to take until logging to wandb
 - bucket_indices_path - Path to the bucket indices created above
 - data_parquet_folder - Path to the parquet folder the bucket indices were created for
@@ -230,6 +234,47 @@ The train script has the following parameters:
 - saveDir - Directory to save the model to. Note tht models are saved step-wise so they don't overwrite each other.
 - loadModel - True to load a checkpoint, False to not.
 - loadDir/loadFile/load_ema_file/loadDefFile/optimFile/schedulerFile/scalerFile - Directory and file names to load a checkpoint from if loading a checkpoint
+
+The base params I used for the RoPE 2d models are as follows:
+- totalSteps - 300,000 for 256 resolution, 400,000 for 512 resolution (700,000 total)
+- batchSize - 140 for 256 resolution, 40 for 512 resolution, and 15 for 1024 resolution
+- accumulation_steps - 2
+- inCh - 16, should probably not be changed (Output of the VAE has 16 channels)
+- loader_to_model_gpu - loader_to_model_gpu = `{ 0: [2, 3, 4], 1: [5, 6, 7], 8: [10, 11, 12], 9: [13, 14, 15], 16: [18, 19, 20], 17: [21, 22, 23], 24: [26, 27, 28], 25: [29, 30, 31] }`
+   - This works for 4 nodes with 8 GPUs each, theoretically. On each node, the first 2 GPUs are threated as data GPUs and are mapped to the other 6 GPUs treated as model GPUs
+- class_dim - Should probably not be changed (Dimension of the pooled of the CLIP model)
+- patch_size - 2
+- num_blocks - 19
+- dim - int(64*num_blocks)
+- hidden_scale - 4.0
+- num_heads - num_blocks
+- attn_type - softmax_flash
+- MLP_type - swiglu
+- device - gpu
+- wandb_name - >w<
+- wandb_log_gradients - False (Unless I needed to debug the gradients)
+- log_steps - 10
+- bucket_indices_path - data/bucket_indices_256.npy for 256 resolution, data/bucket_indices_512.npy for 512 resolution, data/bucket_indices_1024.npy for 1024 resolution
+- data_parquet_folder - data/cc12m_and_imagenet21K_highqual_256 for 256 resolution, data/cc12m_and_imagenet21K_highqual_512 for 512 resolution, data/cc12m_and_imagenet21K_highqual_1024 for 1024 resolution
+- max_res - 256 for 256 resolution, 512 for 512 resolution, 1024 for 1024 resolution
+- max_res_orig - 256 for all resolutions (should be the resolution the first checkpoint was started at)
+- null_prob_pooled - 0.1
+- null_prob_gemma - 0.316
+- null_prob_bert - 0.316
+- lr - 1e-4
+- use_lr_scheduler - False
+- ema_update_freq - 100
+- ema_decay - 0.99
+- warmup_steps - 1000
+- checkpoint_MLP - True
+- checkpoint_attn - True
+- positional_encoding - RoPE2d
+- kv_merge_attn - False
+- qk_half_dim - False
+- text_loss_weight - 0.0
+- reset_wandb - True
+- reset_optim - True
+- numSaveSteps - 1000
 
 If all goes well, the thing should train!
 
@@ -268,6 +313,8 @@ The model mostly follows the original stable diffusion 3 architecture, but below
 5. I fix the skip connection in each transformer block. The diagram shows a skip connection from the input into the block to the output of attention and output of the MLP. This should be a skip connection from the block input to the attention output, then a skip connection from the attention output to the MLP output like in a normal transformer.
 6. Instead of applying SiLU to the timestep embedding every layer (which makes no sense. Just do it once), I apply an MLP then SiLU.
 7. I actually recaption all images
+
+Note that I trained the model with a batch size of 140*(6 model gpus)=840 on 256 resolution and a batch size of 40*(6 model gpus)=240 for 512 resolution finetune.
 
 
 

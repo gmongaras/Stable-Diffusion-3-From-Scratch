@@ -42,9 +42,12 @@ src/models/
 tmp/
 data/bucket_indices_256.npy
 data/bucket_indices_512.npy
+data/bucket_indices_1024.npy
 SD3Venv/
 
+!selected_images/*
 !runjob_SLURM.sh
+!runjob_create_indices.sh
 !.gitignore
 !models/README.md
 !results/*.gif

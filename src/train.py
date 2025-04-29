@@ -7,9 +7,10 @@ import os
 
 
 def train():
-    totalSteps = 600_000
+    totalSteps = 1_000_000
     # batchSize = 140 # Stage 1
-    batchSize = 40 # Stage 2
+    # batchSize = 40 # Stage 2
+    batchSize = 13 # Stage 3
     accumulation_steps = 2
     inCh = 16
 
@@ -39,12 +40,12 @@ def train():
     attn_type = "softmax_flash"
     MLP_type = "swiglu" # gelu or swiglu
     device = "gpu"
-    wandb_name = "datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
+    wandb_name = "datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_14batchsize_stage3"
     wandb_log_gradients = False # Turn this off to prevent wandb from hogging gpu memory (illegal memory accesses will occur when memory usage isn't maximum)
     log_steps = 10
-    bucket_indices_path = "data/bucket_indices_512.npy"
-    data_parquet_folder = "data/cc12m_and_imagenet21K_highqual_512"
-    max_res = 512 # Max res in pixel space, not latent space
+    bucket_indices_path = "data/bucket_indices_1024.npy"
+    data_parquet_folder = "data/cc12m_and_imagenet21K_highqual_1024"
+    max_res = 1024 # Max res in pixel space, not latent space
     max_res_orig = 256
     # The original paper used 0.464 because 0.464*0.464*0.464 ~= 0.1 for three parts.
     # We want to mask about 10% of the time. Since there's only one pooled, that's just 0.1
@@ -63,20 +64,20 @@ def train():
     kv_merge_attn = False
     qk_half_dim = False
     text_loss_weight = 0.0 # Zero for no text loss
-    reset_wandb = False
-    reset_optim = False
+    reset_wandb = True
+    reset_optim = True
 
     numSaveSteps = 1000
-    saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
+    saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_14batchsize_stage3"
 
     loadModel = True
     loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
-    loadFile = "model_534000s.pkl"
-    load_ema_file = "model_ema_534000s.pkl"
-    loadDefFile = "model_params_534000s.json"
-    optimFile = "optim_534000s.pkl"
-    schedulerFile = "scheduler_534000s.pkl"
-    scalerFile = "scaler_534000s.pkl"
+    loadFile = "model_678000s.pkl"
+    load_ema_file = "model_ema_678000s.pkl"
+    loadDefFile = "model_params_678000s.json"
+    optimFile = "optim_678000s.pkl"
+    schedulerFile = "scheduler_678000s.pkl"
+    scalerFile = "scaler_678000s.pkl"
     
     
     

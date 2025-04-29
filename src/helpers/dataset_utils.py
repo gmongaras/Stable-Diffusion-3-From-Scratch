@@ -124,7 +124,7 @@ class RandomBucketSampler(Sampler):
         # Remove buckets smaller than the batch size
         removed = [i for i,j in self.bucket_list.items() if len(j) <= batch_size]
         print(f"Removing the following buckets as they are too small: {removed}")
-        self.bucket_list = {i:j for i,j in self.bucket_list.items() if len(j) > batch_size}
+        self.bucket_list = {i:j for i,j in self.bucket_list.items() if len(j) > 3*batch_size}
         
         self.bucket_list = [(bucket_size, indices) for bucket_size, indices in self.bucket_list.items()]
         self.batch_size = batch_size
