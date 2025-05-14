@@ -7,7 +7,7 @@ import os
 
 
 def train():
-    totalSteps = 1_000_000
+    totalSteps = 1_500_000
     # batchSize = 140 # Stage 1
     # batchSize = 40 # Stage 2
     batchSize = 13 # Stage 3
@@ -64,20 +64,20 @@ def train():
     kv_merge_attn = False
     qk_half_dim = False
     text_loss_weight = 0.0 # Zero for no text loss
-    reset_wandb = True
-    reset_optim = True
+    reset_wandb = False
+    reset_optim = False
 
     numSaveSteps = 1000
     saveDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_14batchsize_stage3"
 
     loadModel = True
-    loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_40batchsize_stage2"
-    loadFile = "model_678000s.pkl"
-    load_ema_file = "model_ema_678000s.pkl"
-    loadDefFile = "model_params_678000s.json"
-    optimFile = "optim_678000s.pkl"
-    schedulerFile = "scheduler_678000s.pkl"
-    scalerFile = "scaler_678000s.pkl"
+    loadDir = "models/datav3_attempt5_8GPU_SoftFlash_RoPE2d_2AccSteps_14batchsize_stage3"
+    loadFile = "model_1126000s.pkl"
+    load_ema_file = "model_ema_1126000s.pkl"
+    loadDefFile = "model_params_1126000s.json"
+    optimFile = "optim_1126000s.pkl"
+    schedulerFile = "scheduler_1126000s.pkl"
+    scalerFile = "scaler_1126000s.pkl"
     
     
     
