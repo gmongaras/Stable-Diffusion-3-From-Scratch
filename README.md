@@ -68,7 +68,7 @@ pip install torch==2.6.0+cu118 torchvision==0.21.0+cu118 --index-url https://dow
 
 Also install the verison of xformers that fits your gpu from `https://github.com/facebookresearch/xformers`. Again, any version of cuda should work. As for the package verison I used `0.0.29.post3`. This was the latest at the time and matches with torch 2.6.0. It can be installed with `pip install -U xformers==0.0.29.post3 --index-url <find this part at the xformers site>`
 
-I use [flash attention](https://github.com/Dao-AILab/flash-attention) in this repo. You can install it with the following. Note that I am putting the version just in case there are deprecation issues. **For inference, this is optional!**
+I use [flash attention](https://github.com/Dao-AILab/flash-attention) in this repo. You can install it with the following. Note that I am putting the version just in case there are deprecation issues. **Note that for inference, this is kinda optional. Outputs will be slightly off without it**
 ```
 pip install wheel
 pip install flash-attn==2.6.3 --no-build-isolation
