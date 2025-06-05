@@ -128,7 +128,8 @@ class VAE_T5_CLIP_inference:
         ).eval().to(self.device)
         def ModernBert_generate_text(text):
             text = self.ModernBert_tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=77).to(self.device)
-            return self.ModernBert_model(**text).last_hidden_state
+            mask = text.data["attention_mask"][:, :, None]
+            return self.ModernBert_model(**text).last_hidden_state * mask
         self.ModernBert_generate_text = ModernBert_generate_text
 
         torch.cuda.empty_cache()

@@ -264,7 +264,6 @@ class Attention(nn.Module):
 
             
         # Softmax attention
-        self.attn_type = "softmax"
         if self.attn_type == "softmax":
             # Create mask
             if self.causal:
