@@ -1,6 +1,11 @@
 import torch
 from torch import nn
-from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+USE_FLASH = True
+try:
+    from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+except:
+    USE_FLASH = False
+    print("----------\n\nFlash attention could not be loaded!! Defaulting to manual attention\n\n----------")
 from src.blocks.patchify import patchify, unpatchify
 from src.blocks.rotary_embedding import RotaryEmbedding, apply_rotary_emb
 import src.blocks.rotary_embedding_2d as rotary_embedding_2d
@@ -80,6 +85,8 @@ class Attention(nn.Module):
         else:
             raise RuntimeError(f"attn_type must be either softmax or cosine, but got {attn_type}")
         self.attn_type = attn_type
+        if self.attn_type == "softmax_flash" and not USE_FLASH:
+            self.attn_type = "softmax"
         self.causal = causal
         
 
@@ -261,18 +268,19 @@ class Attention(nn.Module):
             # Create mask
             if self.causal:
                 mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device)
-                    
-            # Flash attention
-            # attn = flash_attn_func(queries, keys, values, causal=self.causal)
 
-            attn = (queries @ keys.mT) * self.scale
+            # Flash attention
+            # attn_ = flash_attn_func(queries.transpose(1, 2).to(torch.bfloat16), keys.transpose(1, 2).to(torch.bfloat16), values.transpose(1, 2).to(torch.bfloat16), causal=self.causal, softmax_scale=self.scale).transpose(1, 2).to(queries.dtype)
+
+            attn = (queries.to(torch.bfloat16) @ keys.to(torch.bfloat16).mT) * self.scale
             
             if self.causal:
                 attn = attn.masked_fill(mask, float('-inf')).softmax(dim=-1)
             else:
                 attn = attn.softmax(dim=-1)
 
-            attn = attn @ values
+            attn = (attn @ values.to(torch.bfloat16)).to(queries.dtype)
+            print()
 
         # Flash attention
         elif self.attn_type == "softmax_flash":

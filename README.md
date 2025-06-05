@@ -66,9 +66,9 @@ Install the version of torch that fits your GPU from `https://pytorch.org/get-st
 pip install torch==2.6.0+cu118 torchvision==0.21.0+cu118 --index-url https://download.pytorch.org/whl/cu118
 ```
 
-Also install the verison of xformers that fits your gpu from `https://github.com/facebookresearch/xformers`. Again, any version of cuda should work. As for the package verison I used `version 0.0.29.post3`. This was the latest at the time.
+Also install the verison of xformers that fits your gpu from `https://github.com/facebookresearch/xformers`. Again, any version of cuda should work. As for the package verison I used `0.0.29.post3`. This was the latest at the time and matches with torch 2.6.0. It can be installed with `pip install -U xformers==0.0.29.post3 --index-url <find this part at the xformers site>`
 
-I use [flash attention](https://github.com/Dao-AILab/flash-attention) in this repo. You can install it with the following. Note that I am putting the version just in case there are deprecation issues.
+I use [flash attention](https://github.com/Dao-AILab/flash-attention) in this repo. You can install it with the following. Note that I am putting the version just in case there are deprecation issues. **For inference, this is optional!**
 ```
 pip install wheel
 pip install flash-attn==2.6.3 --no-build-isolation
@@ -80,6 +80,14 @@ pip install -r requirements.txt
 ```
 
 Most specific versions probably don't matter except for the transformers version as the transformers package changes a lot between versions.
+
+
+
+## Huggingface key
+
+For Gemma, you need to go the the model website [here](https://huggingface.co/google/gemma-2-2b) and request access. It should be given to you within a few days max.
+
+You then have to generate a key that can read models. To do this, go to `Settings -> Access Tokens`. Create a token then store it in a `.env` file at the root of this repo.
 
 
 
@@ -138,7 +146,7 @@ Running the script is easy, just run it like you would any other ipynb script. I
 - sampler - Sampler to use. I have a couple I was experimenting with (`euler`, `euler_stochastic`, `heun`)
 - seed - Keep at -1 to have a random seed. Change to seed the randomness.
 
-The script takes about 18GB of VRAM to run at 512x512 resolution. It was not optimized at all lol
+The script takes about 15GB of VRAM to run at 512x512 resolution. It was not optimized at all lol
 
 
 

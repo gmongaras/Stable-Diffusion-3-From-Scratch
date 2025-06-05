@@ -76,11 +76,14 @@ class VAE_T5_CLIP_inference:
 
         # Gemma 2B - https://huggingface.co/google/gemma-2-2b
         try:
-            with open(".env", "r") as f:
-                token = f.read().strip()
-        except:
-            with open("../.env", "r") as f:
-                token = f.read().strip()
+            try:
+                with open(".env", "r") as f:
+                    token = f.read().strip()
+            except:
+                with open("../.env", "r") as f:
+                    token = f.read().strip()
+        except FileNotFoundError:
+            print(".env not found. Did you create a read-access huggingface key and put it in a .env file?")
         self.Gemma_tokenizer = GemmaTokenizerFast.from_pretrained("google/gemma-2-2b", cache_dir="./models/Gemma2b", legacy=False, token=token)
         self.Gemma_model = Gemma2Model.from_pretrained(
             "google/gemma-2-2b", 
