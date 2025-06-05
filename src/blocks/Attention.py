@@ -264,13 +264,16 @@ class Attention(nn.Module):
 
             
         # Softmax attention
+        self.attn_type = "softmax"
         if self.attn_type == "softmax":
             # Create mask
             if self.causal:
                 mask = torch.tril(torch.ones(B, self.num_heads, N, N, requires_grad=False)).bool().to(x.device)
 
-            # Flash attention
-            # attn_ = flash_attn_func(queries.transpose(1, 2).to(torch.bfloat16), keys.transpose(1, 2).to(torch.bfloat16), values.transpose(1, 2).to(torch.bfloat16), causal=self.causal, softmax_scale=self.scale).transpose(1, 2).to(queries.dtype)
+            # attn = torch.nn.functional.scaled_dot_product_attention(query=queries.to(torch.bfloat16), key=keys.to(torch.bfloat16), value=values.to(torch.bfloat16), scale=self.scale).to(queries.dtype)
+
+            # # Flash attention
+            # attn__ = flash_attn_func(queries.transpose(1, 2).to(torch.bfloat16), keys.transpose(1, 2).to(torch.bfloat16), values.transpose(1, 2).to(torch.bfloat16), causal=self.causal, softmax_scale=self.scale).transpose(1, 2).to(queries.dtype)
 
             attn = (queries.to(torch.bfloat16) @ keys.to(torch.bfloat16).mT) * self.scale
             
@@ -280,7 +283,6 @@ class Attention(nn.Module):
                 attn = attn.softmax(dim=-1)
 
             attn = (attn @ values.to(torch.bfloat16)).to(queries.dtype)
-            print()
 
         # Flash attention
         elif self.attn_type == "softmax_flash":
